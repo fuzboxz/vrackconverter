@@ -78,8 +78,8 @@ func getDefaultHubMediumParams() []any {
 // getDefaultHubMediumData returns the default data structure for HubMedium.
 func getDefaultHubMediumData(patchName, patchDesc string) map[string]any {
 	return map[string]any{
-		"Mappings":           make([]any, 8),
-		"KnobSetNames":        make([]any, 8),
+		"Mappings":     make([]any, 8),
+		"KnobSetNames": make([]any, 8),
 		"Alias": map[string]any{
 			"Input":  make([]any, 8),
 			"Output": make([]any, 8),

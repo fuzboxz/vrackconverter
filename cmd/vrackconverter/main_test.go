@@ -364,3 +364,263 @@ func TestCLI_MrkWithOutput_RespectsOutput(t *testing.T) {
 		t.Error("should not create auto-named output when -o is specified")
 	}
 }
+
+// createTestMrkBundle creates a mock .mrk directory bundle with patch.vcv inside
+func createTestMrkBundle(t *testing.T, parentDir, name string) string {
+	mrkDir := filepath.Join(parentDir, name+".mrk")
+	if err := os.Mkdir(mrkDir, 0755); err != nil {
+		t.Fatalf("Failed to create .mrk directory: %v", err)
+	}
+
+	testData := []byte(`{"version":"0.6.0","modules":[],"wires":[]}`)
+	patchPath := filepath.Join(mrkDir, "patch.vcv")
+	if err := os.WriteFile(patchPath, testData, 0644); err != nil {
+		t.Fatalf("Failed to create patch.vcv inside .mrk: %v", err)
+	}
+
+	return mrkDir
+}
+
+// createTestVcvFile creates a test .vcv file
+func createTestVcvFile(t *testing.T, parentDir, name string) string {
+	testData := []byte(`{"version":"0.6.0","modules":[],"wires":[]}`)
+	vcvPath := filepath.Join(parentDir, name+".vcv")
+	if err := os.WriteFile(vcvPath, testData, 0644); err != nil {
+		t.Fatalf("Failed to create .vcv file: %v", err)
+	}
+	return vcvPath
+}
+
+// TestCLI_DirectoryVcv_WithoutOutput_Errors tests that .vcv directories require -o or --overwrite
+func TestCLI_DirectoryVcv_WithoutOutput_Errors(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create directory with .vcv files
+	inputDir := filepath.Join(tmpDir, "vcv-input")
+	if err := os.Mkdir(inputDir, 0755); err != nil {
+		t.Fatalf("Failed to create input directory: %v", err)
+	}
+	createTestVcvFile(t, inputDir, "patch1")
+	createTestVcvFile(t, inputDir, "patch2")
+
+	// Run without -o or --overwrite - should error
+	cmd := exec.Command(binPath(t), inputDir)
+	cmd.Dir = tmpDir
+	output, err := cmd.CombinedOutput()
+
+	if err == nil {
+		t.Fatalf("command should fail for .vcv directory without -o\noutput: %s", output)
+	}
+
+	outputStr := string(output)
+	if !strings.Contains(outputStr, "must specify") {
+		t.Errorf("error message should mention -o or --overwrite required\ngot: %s", outputStr)
+	}
+}
+
+// TestCLI_DirectoryMrk_WithoutOutput_CreatesInPlace tests that .mrk directories create .vcv in same directory
+func TestCLI_DirectoryMrk_WithoutOutput_CreatesInPlace(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create directory with .mrk bundles
+	inputDir := filepath.Join(tmpDir, "mrk-input")
+	if err := os.Mkdir(inputDir, 0755); err != nil {
+		t.Fatalf("Failed to create input directory: %v", err)
+	}
+	createTestMrkBundle(t, inputDir, "patch1")
+	createTestMrkBundle(t, inputDir, "patch2")
+
+	// Run without -o - should create .vcv files in same directory
+	cmd := exec.Command(binPath(t), inputDir, "-q")
+	cmd.Dir = tmpDir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("command should succeed for .mrk directory without -o: %v\noutput: %s", err, output)
+	}
+
+	// Check that .vcv files were created in the input directory
+	for _, name := range []string{"patch1.vcv", "patch2.vcv"} {
+		outputPath := filepath.Join(inputDir, name)
+		if _, err := os.Stat(outputPath); err != nil {
+			t.Errorf("expected output file %s should exist: %v", outputPath, err)
+		}
+	}
+
+	// Verify .mrk bundles were not modified
+	patch1Path := filepath.Join(inputDir, "patch1.mrk", "patch.vcv")
+	content, _ := os.ReadFile(patch1Path)
+	if string(content) != `{"version":"0.6.0","modules":[],"wires":[]}` {
+		t.Error("patch.vcv inside .mrk bundle should not be modified")
+	}
+}
+
+// TestCLI_DirectoryMrk_WithOutput tests that .mrk directories with -o create files in output directory
+func TestCLI_DirectoryMrk_WithOutput(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create input directory with .mrk bundles
+	inputDir := filepath.Join(tmpDir, "mrk-input")
+	if err := os.Mkdir(inputDir, 0755); err != nil {
+		t.Fatalf("Failed to create input directory: %v", err)
+	}
+	createTestMrkBundle(t, inputDir, "patch1")
+	createTestMrkBundle(t, inputDir, "patch2")
+
+	// Run with -o outputDir/
+	outputDir := filepath.Join(tmpDir, "output")
+	cmd := exec.Command(binPath(t), inputDir, "-o", outputDir, "-q")
+	cmd.Dir = tmpDir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("command should succeed: %v\noutput: %s", err, output)
+	}
+
+	// Check that output directory was created
+	if _, err := os.Stat(outputDir); err != nil {
+		t.Errorf("output directory should be created: %v", err)
+	}
+
+	// Check that .vcv files were created in output directory
+	for _, name := range []string{"patch1.vcv", "patch2.vcv"} {
+		outputPath := filepath.Join(outputDir, name)
+		if _, err := os.Stat(outputPath); err != nil {
+			t.Errorf("expected output file %s should exist: %v", outputPath, err)
+		}
+	}
+
+	// Verify .vcv files were NOT created in input directory
+	for _, name := range []string{"patch1.vcv", "patch2.vcv"} {
+		inputPath := filepath.Join(inputDir, name)
+		if _, err := os.Stat(inputPath); err == nil {
+			t.Errorf("output file should not be created in input directory: %s", inputPath)
+		}
+	}
+}
+
+// TestCLI_DirectoryVcv_WithOutput tests that .vcv directories with -o work correctly
+func TestCLI_DirectoryVcv_WithOutput(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create input directory with .vcv files
+	inputDir := filepath.Join(tmpDir, "vcv-input")
+	if err := os.Mkdir(inputDir, 0755); err != nil {
+		t.Fatalf("Failed to create input directory: %v", err)
+	}
+	createTestVcvFile(t, inputDir, "patch1")
+	createTestVcvFile(t, inputDir, "patch2")
+
+	// Run with -o outputDir/
+	outputDir := filepath.Join(tmpDir, "output")
+	cmd := exec.Command(binPath(t), inputDir, "-o", outputDir, "-q")
+	cmd.Dir = tmpDir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("command should succeed: %v\noutput: %s", err, output)
+	}
+
+	// Check that .vcv files were created in output directory
+	for _, name := range []string{"patch1.vcv", "patch2.vcv"} {
+		outputPath := filepath.Join(outputDir, name)
+		if _, err := os.Stat(outputPath); err != nil {
+			t.Errorf("expected output file %s should exist: %v", outputPath, err)
+		}
+	}
+}
+
+// TestCLI_DirectoryMixed_WithOutput tests that mixed directories work correctly
+func TestCLI_DirectoryMixed_WithOutput(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create directory with both .vcv and .mrk files
+	inputDir := filepath.Join(tmpDir, "mixed-input")
+	if err := os.Mkdir(inputDir, 0755); err != nil {
+		t.Fatalf("Failed to create input directory: %v", err)
+	}
+	createTestVcvFile(t, inputDir, "vcvpatch")
+	createTestMrkBundle(t, inputDir, "mrkpatch")
+
+	// Mixed directory without -o should error (treats as .vcv directory)
+	cmd := exec.Command(binPath(t), inputDir)
+	cmd.Dir = tmpDir
+	output, _ := cmd.CombinedOutput()
+	if !strings.Contains(string(output), "must specify") {
+		t.Errorf("mixed directory without -o should error\noutput: %s", output)
+	}
+
+	// Mixed directory with -o should work
+	outputDir := filepath.Join(tmpDir, "output")
+	cmd = exec.Command(binPath(t), inputDir, "-o", outputDir, "-q")
+	cmd.Dir = tmpDir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("command should succeed with -o: %v\noutput: %s", err, output)
+	}
+
+	// Check both file types were converted
+	for _, name := range []string{"vcvpatch.vcv", "mrkpatch.vcv"} {
+		outputPath := filepath.Join(outputDir, name)
+		if _, err := os.Stat(outputPath); err != nil {
+			t.Errorf("expected output file %s should exist: %v", outputPath, err)
+		}
+	}
+}
+
+// TestCLI_DirectoryEmpty tests that empty directories complete without error
+func TestCLI_DirectoryEmpty(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create empty directory
+	inputDir := filepath.Join(tmpDir, "empty")
+	if err := os.Mkdir(inputDir, 0755); err != nil {
+		t.Fatalf("Failed to create input directory: %v", err)
+	}
+
+	// Run with -o output
+	outputDir := filepath.Join(tmpDir, "output")
+	cmd := exec.Command(binPath(t), inputDir, "-o", outputDir, "-q")
+	cmd.Dir = tmpDir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("command should succeed for empty directory: %v\noutput: %s", err, output)
+	}
+
+	// Output directory should still be created
+	if _, err := os.Stat(outputDir); err != nil {
+		t.Errorf("output directory should be created even for empty input: %v", err)
+	}
+}
+
+// TestCLI_DirectoryMrkCorrupt tests that corrupt .mrk bundles log errors but continue processing
+func TestCLI_DirectoryMrkCorrupt(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create directory with .mrk bundles (one good, one corrupt)
+	inputDir := filepath.Join(tmpDir, "mrk-input")
+	if err := os.Mkdir(inputDir, 0755); err != nil {
+		t.Fatalf("Failed to create input directory: %v", err)
+	}
+	createTestMrkBundle(t, inputDir, "good")
+
+	// Create corrupt .mrk bundle (missing patch.vcv)
+	corruptMrk := filepath.Join(inputDir, "corrupt.mrk")
+	if err := os.Mkdir(corruptMrk, 0755); err != nil {
+		t.Fatalf("Failed to create corrupt .mrk directory: %v", err)
+	}
+
+	// Run with -o output
+	outputDir := filepath.Join(tmpDir, "output")
+	cmd := exec.Command(binPath(t), inputDir, "-o", outputDir, "-q")
+	cmd.Dir = tmpDir
+	output, err := cmd.CombinedOutput()
+
+	// Command should fail due to corrupt bundle
+	if err == nil {
+		t.Fatalf("command should fail with corrupt .mrk bundle\noutput: %s", output)
+	}
+
+	// But the good .vcv file should still be created
+	goodOutput := filepath.Join(outputDir, "good.vcv")
+	if _, err := os.Stat(goodOutput); err != nil {
+		t.Errorf("good patch should still be converted despite corrupt bundle: %v", err)
+	}
+}
