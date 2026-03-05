@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-func TransformPatch(root map[string]any, targetVersion string, issues *[]string) error {
+func TransformPatch(root map[string]any, targetVersion string, issues *[]string, opts Options, inputFilename string) error {
 	root["version"] = targetVersion
 
 	delete(root, "path")
@@ -204,6 +204,15 @@ func TransformPatch(root map[string]any, targetVersion string, issues *[]string)
 
 	// Replace cables array with filtered version
 	root["cables"] = validCables
+
+	// Add MetaModule if requested
+	if opts.MetaModule {
+		modules, ok := root["modules"].([]any)
+		if ok {
+			hubModule := createHubMediumModule(modules, root, inputFilename)
+			root["modules"] = append(modules, hubModule)
+		}
+	}
 
 	// Validate conversion
 	validateConversion(root, issues)

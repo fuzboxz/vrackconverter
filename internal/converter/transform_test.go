@@ -37,7 +37,7 @@ func TestTransformPatch_NoExplicitIDs(t *testing.T) {
 	}
 
 	var issues []string
-	if err := TransformPatch(root, "2.6.6", &issues); err != nil {
+	if err := TransformPatch(root, "2.6.6", &issues, Options{}, ""); err != nil {
 		t.Fatalf("TransformPatch failed: %v", err)
 	}
 
@@ -95,7 +95,7 @@ func TestTransformPatch_DuplicateIDs(t *testing.T) {
 	}
 
 	var issues []string
-	if err := TransformPatch(root, "2.6.6", &issues); err != nil {
+	if err := TransformPatch(root, "2.6.6", &issues, Options{}, ""); err != nil {
 		t.Fatalf("TransformPatch failed: %v", err)
 	}
 
@@ -154,7 +154,7 @@ func TestTransformPatch_ColorConversion(t *testing.T) {
 	}
 
 	var issues []string
-	if err := TransformPatch(root, "2.6.6", &issues); err != nil {
+	if err := TransformPatch(root, "2.6.6", &issues, Options{}, ""); err != nil {
 		t.Fatalf("TransformPatch failed: %v", err)
 	}
 
@@ -191,7 +191,7 @@ func TestTransformPatch_DisabledToBypass(t *testing.T) {
 	}
 
 	var issues []string
-	if err := TransformPatch(root, "2.6.6", &issues); err != nil {
+	if err := TransformPatch(root, "2.6.6", &issues, Options{}, ""); err != nil {
 		t.Fatalf("TransformPatch failed: %v", err)
 	}
 
@@ -229,7 +229,7 @@ func TestTransformPatch_ParamIDConversion(t *testing.T) {
 	}
 
 	var issues []string
-	if err := TransformPatch(root, "2.6.6", &issues); err != nil {
+	if err := TransformPatch(root, "2.6.6", &issues, Options{}, ""); err != nil {
 		t.Fatalf("TransformPatch failed: %v", err)
 	}
 
@@ -273,7 +273,7 @@ func TestTransformPatch_PreserveExistingIDs(t *testing.T) {
 	}
 
 	var issues []string
-	if err := TransformPatch(root, "2.6.6", &issues); err != nil {
+	if err := TransformPatch(root, "2.6.6", &issues, Options{}, ""); err != nil {
 		t.Fatalf("TransformPatch failed: %v", err)
 	}
 
@@ -336,7 +336,7 @@ func TestTransformPatch_MixedIndexAndIDReferences(t *testing.T) {
 	}
 
 	var issues []string
-	if err := TransformPatch(root, "2.6.6", &issues); err != nil {
+	if err := TransformPatch(root, "2.6.6", &issues, Options{}, ""); err != nil {
 		t.Fatalf("TransformPatch failed: %v", err)
 	}
 
@@ -390,7 +390,7 @@ func TestTransformPatch_AudioDataConversion(t *testing.T) {
 	}
 
 	var issues []string
-	if err := TransformPatch(root, "2.6.6", &issues); err != nil {
+	if err := TransformPatch(root, "2.6.6", &issues, Options{}, ""); err != nil {
 		t.Fatalf("TransformPatch failed: %v", err)
 	}
 
@@ -440,7 +440,7 @@ func TestTransformPatch_Validation(t *testing.T) {
 	}
 
 	var issues []string
-	if err := TransformPatch(root, "2.6.6", &issues); err != nil {
+	if err := TransformPatch(root, "2.6.6", &issues, Options{}, ""); err != nil {
 		t.Fatalf("TransformPatch failed: %v", err)
 	}
 
@@ -450,4 +450,199 @@ func TestTransformPatch_Validation(t *testing.T) {
 			t.Errorf("Unexpected broken references warning: %s", issue)
 		}
 	}
+}
+
+func TestCreateHubMediumModule(t *testing.T) {
+	t.Run("creates module with correct structure", func(t *testing.T) {
+		modules := []any{
+			map[string]any{"id": int64(1), "pos": []any{float64(10), float64(0)}},
+		}
+		root := map[string]any{}
+		inputFilename := "MyPatch.vcv"
+
+		hub := createHubMediumModule(modules, root, inputFilename)
+
+		// Check basic fields
+		if hub["plugin"] != "4msCompany" {
+			t.Errorf("expected plugin 4msCompany, got %v", hub["plugin"])
+		}
+		if hub["model"] != "HubMedium" {
+			t.Errorf("expected model HubMedium, got %v", hub["model"])
+		}
+
+		// Check ID is next available
+		if hub["id"] != int64(2) {
+			t.Errorf("expected id 2, got %v", hub["id"])
+		}
+
+		// Check position (right of existing module at X=10, at X+1)
+		pos, ok := hub["pos"].([]any)
+		if !ok || len(pos) < 2 {
+			t.Fatal("pos not set correctly")
+		}
+		if pos[0] != float64(11) { // 10 + 1
+			t.Errorf("expected x position 11, got %v", pos[0])
+		}
+		if pos[1] != float64(0) {
+			t.Errorf("expected y position 0, got %v", pos[1])
+		}
+
+		// Check data structure
+		data, ok := hub["data"].(map[string]any)
+		if !ok {
+			t.Fatal("data not a map")
+		}
+		if _, hasMappings := data["Mappings"]; !hasMappings {
+			t.Error("data should have Mappings")
+		}
+		if _, hasPatchName := data["PatchName"]; !hasPatchName {
+			t.Error("data should have PatchName")
+		}
+	})
+
+	t.Run("uses filename when no patch name in root", func(t *testing.T) {
+		modules := []any{}
+		root := map[string]any{}
+		inputFilename := "/path/to/MyAwesomePatch.vcv"
+
+		hub := createHubMediumModule(modules, root, inputFilename)
+
+		data, ok := hub["data"].(map[string]any)
+		if !ok {
+			t.Fatal("data not a map")
+		}
+		if data["PatchName"] != "MyAwesomePatch" {
+			t.Errorf("expected PatchName from filename, got %v", data["PatchName"])
+		}
+	})
+
+	t.Run("uses patch name from root when available", func(t *testing.T) {
+		modules := []any{}
+		root := map[string]any{"name": "Custom Name", "description": "Custom Desc"}
+		inputFilename := "ignored.vcv"
+
+		hub := createHubMediumModule(modules, root, inputFilename)
+
+		data, _ := hub["data"].(map[string]any)
+		if data["PatchName"] != "Custom Name" {
+			t.Errorf("expected Custom Name, got %v", data["PatchName"])
+		}
+		if data["PatchDesc"] != "Custom Desc" {
+			t.Errorf("expected Custom Desc, got %v", data["PatchDesc"])
+		}
+	})
+
+	t.Run("handles empty modules array", func(t *testing.T) {
+		modules := []any{}
+		root := map[string]any{}
+		inputFilename := "test.vcv"
+
+		hub := createHubMediumModule(modules, root, inputFilename)
+
+		// Should still work, positioned at origin
+		pos, ok := hub["pos"].([]any)
+		if !ok || len(pos) < 2 {
+			t.Fatal("pos not set correctly")
+		}
+		if pos[0] != float64(0) {
+			t.Errorf("expected x position 0, got %v", pos[0])
+		}
+		if pos[1] != float64(0) {
+			t.Errorf("expected y position 0, got %v", pos[1])
+		}
+		if hub["id"] != int64(0) {
+			t.Errorf("expected id 0, got %v", hub["id"])
+		}
+	})
+
+	t.Run("finds rightmost module at Y=0", func(t *testing.T) {
+		modules := []any{
+			map[string]any{"id": int64(1), "pos": []any{float64(10), float64(0)}},
+			map[string]any{"id": int64(2), "pos": []any{float64(30), float64(0)}},
+			map[string]any{"id": int64(3), "pos": []any{float64(50), float64(1)}}, // Different Y, should be ignored
+			map[string]any{"id": int64(4), "pos": []any{float64(20), float64(0)}},
+		}
+		root := map[string]any{}
+		inputFilename := "test.vcv"
+
+		hub := createHubMediumModule(modules, root, inputFilename)
+
+		// Should be placed after X=30 (rightmost at Y=0)
+		pos, _ := hub["pos"].([]any)
+		if pos[0] != float64(31) { // 30 + 1
+			t.Errorf("expected x position 31 (after rightmost Y=0 module), got %v", pos[0])
+		}
+	})
+
+	t.Run("has correct params structure", func(t *testing.T) {
+		modules := []any{}
+		root := map[string]any{}
+		inputFilename := "test.vcv"
+
+		hub := createHubMediumModule(modules, root, inputFilename)
+
+		params, ok := hub["params"].([]any)
+		if !ok {
+			t.Fatal("params not a slice")
+		}
+		if len(params) != 14 {
+			t.Errorf("expected 14 params, got %d", len(params))
+		}
+		// Check first 12 params have value 0.5
+		for i := 0; i < 12; i++ {
+			param, ok := params[i].(map[string]any)
+			if !ok {
+				t.Fatalf("param %d not a map", i)
+			}
+			if param["value"] != 0.5 {
+				t.Errorf("param %d: expected value 0.5, got %v", i, param["value"])
+			}
+			if param["id"] != i {
+				t.Errorf("param %d: expected id %d, got %v", i, i, param["id"])
+			}
+		}
+		// Check last 2 params have value 0
+		for i := 12; i < 14; i++ {
+			param, ok := params[i].(map[string]any)
+			if !ok {
+				t.Fatalf("param %d not a map", i)
+			}
+			if param["value"] != 0.0 {
+				t.Errorf("param %d: expected value 0.0, got %v", i, param["value"])
+			}
+		}
+	})
+}
+
+func TestGetNextModuleID(t *testing.T) {
+	t.Run("returns 0 for empty module list", func(t *testing.T) {
+		modules := []any{}
+		id := getNextModuleID(modules)
+		if id != 0 {
+			t.Errorf("expected 0, got %d", id)
+		}
+	})
+
+	t.Run("returns max + 1", func(t *testing.T) {
+		modules := []any{
+			map[string]any{"id": int64(1)},
+			map[string]any{"id": int64(5)},
+			map[string]any{"id": int64(3)},
+		}
+		id := getNextModuleID(modules)
+		if id != 6 {
+			t.Errorf("expected 6, got %d", id)
+		}
+	})
+
+	t.Run("handles modules without id field", func(t *testing.T) {
+		modules := []any{
+			map[string]any{"plugin": "Test"}, // No id field
+			map[string]any{"id": int64(2)},
+		}
+		id := getNextModuleID(modules)
+		if id != 3 {
+			t.Errorf("expected 3, got %d", id)
+		}
+	})
 }
