@@ -187,6 +187,7 @@ jobs:
       - name: Create release
         env:
           NOTES_FILE: ${{ runner.temp }}/release-notes.txt
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # Get commits since last tag, filter out test/CI changes and Claude commits
           PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
@@ -209,6 +210,4 @@ jobs:
             artifacts/vrackconverter-*/*/*.tar.gz \
             artifacts/vrackconverter-*/*/*.zip \
             artifacts/checksums.txt
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
