@@ -624,3 +624,101 @@ func TestCLI_DirectoryMrkCorrupt(t *testing.T) {
 		t.Errorf("good patch should still be converted despite corrupt bundle: %v", err)
 	}
 }
+
+// TestConvertCLI_WithMetaModule tests the MetaModule flag functionality
+func TestConvertCLI_WithMetaModule(t *testing.T) {
+	t.Run("short flag -m adds MetaModule", func(t *testing.T) {
+		tmpDir := t.TempDir()
+
+		testData := []byte(`{"version":"0.6.0","modules":[{"plugin":"Core","model":"VCO-1","id":1}],"wires":[]}`)
+		inputPath := filepath.Join(tmpDir, "test.vcv")
+		outputPath := filepath.Join(tmpDir, "output.vcv")
+
+		if err := os.WriteFile(inputPath, testData, 0644); err != nil {
+			t.Fatalf("Failed to create test input: %v", err)
+		}
+
+		// Convert with -m flag
+		cmd := exec.Command(binPath(t), inputPath, "-o", outputPath, "-m", "-q")
+		cmd.Dir = tmpDir
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("conversion should succeed with -m flag: %v\noutput: %s", err, output)
+		}
+
+		// Verify output was created
+		if _, err := os.Stat(outputPath); err != nil {
+			t.Errorf("output file should exist: %v", err)
+		}
+
+		// Note: Full verification of the MetaModule in the output would require
+		// extracting the tar+zstd archive, which is complex. The unit tests
+		// in transform_test.go verify the MetaModule is correctly added.
+	})
+
+	t.Run("long flag --metamodule adds MetaModule", func(t *testing.T) {
+		tmpDir := t.TempDir()
+
+		testData := []byte(`{"version":"0.6.0","modules":[{"plugin":"Core","model":"VCO-1","id":1}],"wires":[]}`)
+		inputPath := filepath.Join(tmpDir, "test.vcv")
+		outputPath := filepath.Join(tmpDir, "output.vcv")
+
+		if err := os.WriteFile(inputPath, testData, 0644); err != nil {
+			t.Fatalf("Failed to create test input: %v", err)
+		}
+
+		// Convert with --metamodule flag
+		cmd := exec.Command(binPath(t), inputPath, "-o", outputPath, "--metamodule", "-q")
+		cmd.Dir = tmpDir
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("conversion should succeed with --metamodule flag: %v\noutput: %s", err, output)
+		}
+
+		// Verify output was created
+		if _, err := os.Stat(outputPath); err != nil {
+			t.Errorf("output file should exist: %v", err)
+		}
+	})
+
+	t.Run("flag works before input path", func(t *testing.T) {
+		tmpDir := t.TempDir()
+
+		testData := []byte(`{"version":"0.6.0","modules":[],"wires":[]}`)
+		inputPath := filepath.Join(tmpDir, "test.vcv")
+		outputPath := filepath.Join(tmpDir, "output.vcv")
+
+		if err := os.WriteFile(inputPath, testData, 0644); err != nil {
+			t.Fatalf("Failed to create test input: %v", err)
+		}
+
+		// Flag before input path
+		cmd := exec.Command(binPath(t), "-m", inputPath, "-o", outputPath, "-q")
+		cmd.Dir = tmpDir
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("conversion should succeed with -m before input: %v\noutput: %s", err, output)
+		}
+
+		if _, err := os.Stat(outputPath); err != nil {
+			t.Errorf("output file should exist: %v", err)
+		}
+	})
+
+	t.Run("help shows both flag forms", func(t *testing.T) {
+		cmd := exec.Command(binPath(t), "--help")
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("help should succeed: %v", err)
+		}
+
+		outputStr := string(output)
+		if !strings.Contains(outputStr, "-m, --metamodule") {
+			t.Errorf("help should show '-m, --metamodule', got: %s", outputStr)
+		}
+		// Verify old --mm flag is not shown
+		if strings.Contains(outputStr, "--mm") {
+			t.Errorf("help should not show old '--mm' flag")
+		}
+	})
+}

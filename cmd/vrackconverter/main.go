@@ -29,7 +29,8 @@ func init() {
 	flag.BoolVar(&overwrite, "overwrite", false, "Overwrite input file in place")
 	flag.BoolVar(&quiet, "q", false, "Suppress non-error output")
 	flag.BoolVar(&quiet, "quiet", false, "Suppress non-error output")
-	flag.BoolVar(&metamodule, "mm", false, "Add 4ms HubMedium (MetaModule) to patch")
+	flag.BoolVar(&metamodule, "m", false, "Add 4ms MetaModule (HubMedium) to patch")
+	flag.BoolVar(&metamodule, "metamodule", false, "Add 4ms MetaModule (HubMedium) to patch")
 }
 
 func printUsage() {
@@ -48,7 +49,7 @@ Arguments:
 Flags:
   -o, --output <path>    Output file/directory (if not specified, requires --overwrite)
       --overwrite        Overwrite input file in place
-      --mm               Add 4ms HubMedium (MetaModule) to patch
+  -m, --metamodule       Add 4ms MetaModule (HubMedium) to patch
   -q, --quiet            Suppress non-error output
   -V, --version          Show version
   -h, --help             Show this help
@@ -115,7 +116,7 @@ func main() {
 			overwrite = true
 		case "-q", "--quiet":
 			quiet = true
-		case "--mm":
+		case "-m", "--metamodule":
 			metamodule = true
 		default:
 			// Keep positional args and unknown flags for flag.Parse()

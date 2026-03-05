@@ -646,3 +646,97 @@ func TestGetNextModuleID(t *testing.T) {
 		}
 	})
 }
+
+func TestTransformPatch_WithMetaModule(t *testing.T) {
+	t.Run("adds MetaModule when option is set", func(t *testing.T) {
+		patchJSON := `{
+			"version": "0.6.0",
+			"modules": [
+				{"plugin": "Core", "model": "AudioInterface", "params": []}
+			],
+			"wires": []
+		}`
+
+		var root map[string]any
+		if err := json.Unmarshal([]byte(patchJSON), &root); err != nil {
+			t.Fatalf("Failed to parse JSON: %v", err)
+		}
+
+		var issues []string
+		if err := TransformPatch(root, "2.6.6", &issues, Options{MetaModule: true}, "test-patch"); err != nil {
+			t.Fatalf("TransformPatch failed: %v", err)
+		}
+
+		modules := root["modules"].([]any)
+		if len(modules) != 2 {
+			t.Fatalf("Expected 2 modules, got %d", len(modules))
+		}
+
+		// Check that MetaModule was added
+		mm := modules[1].(map[string]any)
+		if mm["plugin"] != "4msCompany" {
+			t.Errorf("Expected plugin 4msCompany, got %v", mm["plugin"])
+		}
+		if mm["model"] != "HubMedium" {
+			t.Errorf("Expected model HubMedium, got %v", mm["model"])
+		}
+	})
+
+	t.Run("does not add MetaModule when option is false", func(t *testing.T) {
+		patchJSON := `{
+			"version": "0.6.0",
+			"modules": [
+				{"plugin": "Core", "model": "AudioInterface", "params": []}
+			],
+			"wires": []
+		}`
+
+		var root map[string]any
+		if err := json.Unmarshal([]byte(patchJSON), &root); err != nil {
+			t.Fatalf("Failed to parse JSON: %v", err)
+		}
+
+		var issues []string
+		if err := TransformPatch(root, "2.6.6", &issues, Options{MetaModule: false}, ""); err != nil {
+			t.Fatalf("TransformPatch failed: %v", err)
+		}
+
+		modules := root["modules"].([]any)
+		if len(modules) != 1 {
+			t.Fatalf("Expected 1 module, got %d", len(modules))
+		}
+	})
+
+	t.Run("uses filename for patch name when MetaModule enabled", func(t *testing.T) {
+		patchJSON := `{
+			"version": "0.6.0",
+			"modules": [],
+			"wires": []
+		}`
+
+		var root map[string]any
+		if err := json.Unmarshal([]byte(patchJSON), &root); err != nil {
+			t.Fatalf("Failed to parse JSON: %v", err)
+		}
+
+		var issues []string
+		if err := TransformPatch(root, "2.6.6", &issues, Options{MetaModule: true}, "MyAwesomePatch.vcv"); err != nil {
+			t.Fatalf("TransformPatch failed: %v", err)
+		}
+
+		modules := root["modules"].([]any)
+		if len(modules) != 1 {
+			t.Fatalf("Expected 1 module, got %d", len(modules))
+		}
+
+		mm := modules[0].(map[string]any)
+		data, ok := mm["data"].(map[string]any)
+		if !ok {
+			t.Fatal("MetaModule should have data field")
+		}
+
+		if data["PatchName"] != "MyAwesomePatch" {
+			t.Errorf("Expected PatchName from filename, got %v", data["PatchName"])
+		}
+	})
+}
