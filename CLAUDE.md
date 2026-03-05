@@ -372,21 +372,21 @@ Some modules have different port numbering between MiRack and VCV Rack 2.
 
 ## MetaModule Support
 
-The `--mm` flag adds a 4ms MetaModule module to converted patches. This enables preset mapping and modular storage functionality.
+The `-m, --metamodule` flag adds a 4ms MetaModule module to converted patches. This enables preset mapping and modular storage functionality.
 
 **Note**: In VCV Rack, the 4ms MetaModule module is called "HubMedium" (plugin: "4msCompany", model: "HubMedium"). The code uses this internal name, but the feature is referred to as "MetaModule" in user-facing documentation.
 
 ### How It Works
 
-1. **Module Addition**: When `--mm` is specified, a HubMedium module is added to the output patch
-2. **Positioning**: HubMedium is placed immediately after the rightmost module at Y=0 (top row)
-3. **Patch Name**: Uses the input filename (without extension) as the patch name in HubMedium
+1. **Module Addition**: When `--metamodule` is specified, a MetaModule (HubMedium) module is added to the output patch
+2. **Positioning**: MetaModule is placed immediately after the rightmost module at Y=0 (top row)
+3. **Patch Name**: Uses the input filename (without extension) as the patch name in MetaModule
 
 ### Usage
 
 ```bash
-vrackconverter input.vcv -o output.vcv --mm
-vrackconverter input.mrk --mm  # Auto-generates .vcv with MetaModule
+vrackconverter input.vcv -o output.vcv --metamodule
+vrackconverter input.mrk -m  # Auto-generates .vcv with MetaModule
 ```
 
 ### Implementation

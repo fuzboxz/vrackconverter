@@ -32,7 +32,7 @@ vrackconverter <input.mrk>             # Auto-create .vcv (never modifies .mrk)
 |------|-------------|
 | `-o, --output <path>` | Output file or directory |
 | `--overwrite` | Overwrite input file in place |
-| `--mm` | Add 4ms MetaModule to converted patch |
+| `-m, --metamodule` | Add 4ms MetaModule (HubMedium) to converted patch |
 | `-q, --quiet` | Suppress non-error output |
 | `-V, --version` | Show version |
 | `-h, --help` | Show help |
@@ -59,7 +59,7 @@ vrackconverter my-patch.mrk
 vrackconverter my-patch.mrk -o converted.vcv
 
 # Convert with MetaModule support (adds 4ms MetaModule)
-vrackconverter old-patch.vcv -o new-patch.vcv --mm
+vrackconverter old-patch.vcv -o new-patch.vcv --metamodule
 
 # Convert a directory of patches
 vrackconverter ./patches/ -o ./converted/
