@@ -1,0 +1,11 @@
+# Code Owners
+
+# All changes to workflows require explicit approval
+.github/workflows/* @fuzboxz
+
+# Go modules and dependencies require approval
+go.mod @fuzboxz
+go.sum @fuzboxz
+
+# All other changes - no specific owner required
+# (relies on branch protection settings)

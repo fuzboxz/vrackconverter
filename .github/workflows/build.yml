@@ -39,15 +39,27 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: go-${{ hashFiles('go.sum') }}
+          # PRs get isolated cache scope, never shared with main branch
+          key: go-${{ runner.os }}-${{ github.event_name }}-${{ hashFiles('go.sum') }}
           restore-keys: |
-            go-
+            go-${{ runner.os }}-push-
+          enableCrossOsArchive: true
 
       - name: Download dependencies
         run: go mod download
+        env:
+          GOPROXY: direct  # Bypass proxy, fetch directly from source
 
       - name: Verify dependencies
         run: go mod verify
+
+      - name: Check for unexpected go.sum changes in PR
+        if: github.event_name == 'pull_request'
+        run: |
+          git diff origin/main -- go.sum
+          if [ $? -eq 0 ]; then
+            echo "::warning::go.sum was modified in this PR. Ensure this is intentional."
+          fi
 
       - name: Build binary (required for CLI integration tests)
         run: go build -ldflags "-X main.Version=dev" -o vrackconverter ./cmd/vrackconverter/
@@ -105,12 +117,16 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: go-${{ hashFiles('go.sum') }}
+          # PRs get isolated cache scope, never shared with main branch
+          key: go-${{ runner.os }}-${{ github.event_name }}-${{ hashFiles('go.sum') }}
           restore-keys: |
-            go-
+            go-${{ runner.os }}-push-
+          enableCrossOsArchive: true
 
       - name: Download dependencies
         run: go mod download
+        env:
+          GOPROXY: direct  # Bypass proxy, fetch directly from source
 
       - name: Verify dependencies
         run: go mod verify
