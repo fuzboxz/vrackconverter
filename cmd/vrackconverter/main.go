@@ -34,12 +34,13 @@ func init() {
 }
 
 func printUsage() {
-	fmt.Fprintf(os.Stderr, `vrackconverter - Convert VCV Rack v0.6 compatible patches (including MiRack) to v2.0 format
+	fmt.Fprintf(os.Stderr, `vrackconverter - Convert between VCV Rack and MiRack patch formats
 
 Usage:
   vrackconverter <input> -o <output>     # Convert to new file
   vrackconverter <input> --overwrite     # Overwrite input file in place
   vrackconverter <input.mrk>             # Auto-create .vcv (never modifies .mrk)
+  vrackconverter <input.vcv> -o output.mrk  # Convert V2 to MiRack
   vrackconverter <dir-with-mrk>         # Auto-creates .vcv in same directory
   vrackconverter <dir> -o <output>       # Batch convert directory
 
@@ -55,11 +56,17 @@ Flags:
   -h, --help             Show this help
 
 Examples:
-  vrackconverter old-patch.vcv -o new-patch.vcv
-  vrackconverter old-patch.vcv --overwrite
+  # MiRack to V2
   vrackconverter my-patch.mrk                      # Creates my-patch.vcv
   vrackconverter my-patch.mrk -o converted.vcv
   vrackconverter ./mrk-patches/                    # Creates .vcv alongside .mrk
+
+  # V2 to MiRack (NEW)
+  vrackconverter v2-patch.vcv -o output.mrk       # Creates output.mrk bundle
+  vrackconverter ./v2-patches/ -o ./mirack/        # Batch convert to MiRack
+
+  # In-place
+  vrackconverter old-patch.vcv --overwrite
   vrackconverter ./patches/ -o ./converted/        # Batch with output dir
 `)
 }
@@ -208,6 +215,15 @@ func main() {
 		printUsage()
 		os.Exit(1)
 	}
+
+	// Check if output is .mrk (V2 → MiRack conversion)
+	if strings.ToLower(filepath.Ext(outputPath)) == ".mrk" {
+		// Use new format-aware pipeline for V2 → MiRack
+		convertFileWithPipeline(inputPath, outputPath, opts)
+		return
+	}
+
+	// Original V0.6/MiRack → V2 conversion (legacy path)
 	if outputPath == "" && overwrite {
 		// In-place conversion: output = input
 		outputPath = inputPath
@@ -215,6 +231,36 @@ func main() {
 
 	// Single file conversion
 	convertFile(inputPath, outputPath, opts)
+}
+
+func convertFileWithPipeline(inputPath, outputPath string, opts converter.Options) {
+	if !opts.Quiet {
+		if inputPath == outputPath {
+			fmt.Printf("Converting: %s (in place)\n", inputPath)
+		} else {
+			fmt.Printf("Converting: %s -> %s\n", inputPath, outputPath)
+		}
+	}
+
+	result := converter.ConvertFileWithPipeline(inputPath, outputPath, opts)
+	if result.Skipped {
+		fmt.Fprintf(os.Stderr, "info: file is already in target format (no conversion needed)\n")
+		os.Exit(0)
+	}
+	if !result.Success {
+		fmt.Fprintf(os.Stderr, "error: %v\n", result.Error)
+		os.Exit(1)
+	}
+
+	if !opts.Quiet {
+		if len(result.Issues) > 0 {
+			fmt.Printf("  Warnings:\n")
+			for _, issue := range result.Issues {
+				fmt.Printf("    - %s\n", issue)
+			}
+		}
+		fmt.Println("  Done!")
+	}
 }
 
 func convertFile(inputPath, outputPath string, opts converter.Options) {
