@@ -32,29 +32,23 @@ build-all:
 	@echo "Building for all platforms..."
 	@mkdir -p $(BUILD_DIR)
 	@echo "Building linux/amd64..."
-	@mkdir -p $(BUILD_DIR)/vrackconverter-linux-amd64
-	GOOS=linux GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/vrackconverter-linux-amd64/$(BINARY_NAME) $(CMD_DIR)
+	GOOS=linux GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/vrackconverter-linux-amd64 $(CMD_DIR)
 	tar -czf $(BUILD_DIR)/vrackconverter-linux-amd64.tar.gz -C $(BUILD_DIR) vrackconverter-linux-amd64
 	@echo "Building linux/arm64..."
-	@mkdir -p $(BUILD_DIR)/vrackconverter-linux-arm64
-	GOOS=linux GOARCH=arm64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/vrackconverter-linux-arm64/$(BINARY_NAME) $(CMD_DIR)
+	GOOS=linux GOARCH=arm64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/vrackconverter-linux-arm64 $(CMD_DIR)
 	tar -czf $(BUILD_DIR)/vrackconverter-linux-arm64.tar.gz -C $(BUILD_DIR) vrackconverter-linux-arm64
 	@echo "Building darwin/amd64..."
-	@mkdir -p $(BUILD_DIR)/vrackconverter-darwin-amd64
-	GOOS=darwin GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/vrackconverter-darwin-amd64/$(BINARY_NAME) $(CMD_DIR)
+	GOOS=darwin GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/vrackconverter-darwin-amd64 $(CMD_DIR)
 	tar -czf $(BUILD_DIR)/vrackconverter-darwin-amd64.tar.gz -C $(BUILD_DIR) vrackconverter-darwin-amd64
 	@echo "Building darwin/arm64..."
-	@mkdir -p $(BUILD_DIR)/vrackconverter-darwin-arm64
-	GOOS=darwin GOARCH=arm64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/vrackconverter-darwin-arm64/$(BINARY_NAME) $(CMD_DIR)
+	GOOS=darwin GOARCH=arm64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/vrackconverter-darwin-arm64 $(CMD_DIR)
 	tar -czf $(BUILD_DIR)/vrackconverter-darwin-arm64.tar.gz -C $(BUILD_DIR) vrackconverter-darwin-arm64
 	@echo "Building windows/amd64..."
-	@mkdir -p $(BUILD_DIR)/vrackconverter-windows-amd64
-	GOOS=windows GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/vrackconverter-windows-amd64/$(BINARY_NAME).exe $(CMD_DIR)
-	cd $(BUILD_DIR)/vrackconverter-windows-amd64 && zip -q ../vrackconverter-windows-amd64.zip $(BINARY_NAME).exe
+	GOOS=windows GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/vrackconverter-windows-amd64.exe $(CMD_DIR)
+	cd $(BUILD_DIR) && zip -q vrackconverter-windows-amd64.zip vrackconverter-windows-amd64.exe
 	@echo "Building windows/arm64..."
-	@mkdir -p $(BUILD_DIR)/vrackconverter-windows-arm64
-	GOOS=windows GOARCH=arm64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/vrackconverter-windows-arm64/$(BINARY_NAME).exe $(CMD_DIR)
-	cd $(BUILD_DIR)/vrackconverter-windows-arm64 && zip -q ../vrackconverter-windows-arm64.zip $(BINARY_NAME).exe
+	GOOS=windows GOARCH=arm64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/vrackconverter-windows-arm64.exe $(CMD_DIR)
+	cd $(BUILD_DIR) && zip -q vrackconverter-windows-arm64.zip vrackconverter-windows-arm64.exe
 	@echo "All builds complete in $(BUILD_DIR)/"
 
 # Run tests
@@ -94,17 +88,6 @@ clean:
 	rm -rf $(BUILD_DIR)
 	@echo "Clean complete"
 
-# Clean intermediate build directories (keep archives)
-.PHONY: clean-intermediate
-clean-intermediate:
-	@echo "Cleaning intermediate build directories..."
-	for dir in $(BUILD_DIR)/vrackconverter-linux-* $(BUILD_DIR)/vrackconverter-darwin-* $(BUILD_DIR)/vrackconverter-windows-*; do \
-		if [ -d "$$dir" ]; then \
-			rm -rf "$$dir"; \
-		fi; \
-	done
-	@echo "Intermediate directories cleaned"
-
 # Show version info
 .PHONY: version
 version:
@@ -114,7 +97,7 @@ version:
 
 # Generate SHA256 checksums for build artifacts
 .PHONY: checksums
-checksums: build-all clean-intermediate
+checksums: build-all
 	@echo "Generating SHA256 checksums..."
 	cd $(BUILD_DIR) && shasum -a 256 *.tar.gz *.zip > checksums.txt
 	@cat $(BUILD_DIR)/checksums.txt

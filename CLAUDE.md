@@ -33,7 +33,6 @@ make
 make build          # Build for current platform
 make build-all      # Build for all platforms
 make test           # Run tests with race detector
-make test-coverage  # Run tests and generate coverage.html
 make fmt            # Format code
 make vet            # Run go vet
 make clean          # Remove build artifacts
@@ -454,3 +453,75 @@ make test
 ```bash
 ./vrackconverter input.vcv -o output.vcv --overwrite
 ```
+
+---
+
+## CI/CD & Releases
+
+### GitHub Actions Workflow
+
+**Location**: `.github/workflows/build.yml`
+
+**Jobs**:
+1. **test** - Runs on every push/PR to `ubuntu-latest`
+2. **build** - Cross-compiles all platforms from single `ubuntu-latest` runner (only on version tags)
+3. **release** - Creates GitHub release with checksums (only on version tags)
+
+### Build Platforms
+
+| Platform | Archive | Binary |
+|----------|---------|--------|
+| linux-amd64 | `vrackconverter-linux-amd64.tar.gz` | `vrackconverter` |
+| linux-arm64 | `vrackconverter-linux-arm64.tar.gz` | `vrackconverter` |
+| darwin-amd64 | `vrackconverter-darwin-amd64.tar.gz` | `vrackconverter` |
+| darwin-arm64 | `vrackconverter-darwin-arm64.tar.gz` | `vrackconverter` |
+| windows-amd64 | `vrackconverter-windows-amd64.zip` | `vrackconverter.exe` |
+| windows-arm64 | `vrackconverter-windows-arm64.zip` | `vrackconverter.exe` |
+
+### Cross-Compilation
+
+All builds are done from a single Linux runner using Go's cross-compilation:
+- `CGO_ENABLED=0` - Pure Go builds (no C dependencies)
+- `GOOS` and `GOARCH` set via environment variables
+- Binaries are statically linked and portable
+
+### Release Process
+
+```bash
+# 1. Commit and push changes to main
+git checkout main && git pull
+
+# 2. Create and push version tag
+git tag -a v1.0.0 -m "Release 1.0.0"
+git push origin v1.0.0
+
+# 3. GitHub Actions builds and creates release automatically
+#    - Builds all 6 platform binaries
+#    - Creates tar.gz/zip archives (each contains a directory with the binary)
+#    - Generates SHA256 checksums (checksums.txt)
+#    - Creates GitHub release with release notes (excludes co-authored commits)
+```
+
+### Re-running a Release
+
+If the release fails, fix the issue and recreate the tag:
+
+```bash
+# Delete tag locally and remotely
+git tag -d v1.0.0
+git push origin :refs/tags/v1.0.0
+
+# Recreate tag
+git tag -a v1.0.0 -m "Release 1.0.0"
+git push origin v1.0.0
+```
+
+### Go Version
+
+- **CI/CD**: Go 1.23
+- **Local development**: Go 1.23+ recommended
+
+### Dependencies
+
+- `github.com/klauspost/compress/zstd` - Pure Go zstd compression (required for v2 patch format)
+- No other external dependencies
