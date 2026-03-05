@@ -7,6 +7,38 @@ import (
 	"strings"
 )
 
+// FormatHandler defines I/O for a specific format.
+type FormatHandler interface {
+	Read(path string) ([]byte, error)
+	Write(data []byte, path string) error
+	Extension() string
+}
+
+// DefaultFormatHandler handles .vcv files (zstd tar archives).
+type DefaultFormatHandler struct{}
+
+func (h *DefaultFormatHandler) Read(path string) ([]byte, error) {
+	return os.ReadFile(path)
+}
+
+func (h *DefaultFormatHandler) Write(data []byte, path string) error {
+	return CreateV2Patch(data, path)
+}
+
+func (h *DefaultFormatHandler) Extension() string {
+	return ".vcv"
+}
+
+// GetFormatHandler returns the appropriate FormatHandler for the given format.
+func GetFormatHandler(fmt Format) FormatHandler {
+	switch fmt {
+	case FormatMiRack:
+		return &MiRackHandler{}
+	default:
+		return &DefaultFormatHandler{}
+	}
+}
+
 type Options struct {
 	Overwrite  bool
 	Quiet      bool
@@ -81,6 +113,155 @@ func ConvertFile(inputPath, outputPath string, opts Options) Result {
 
 	result.Success = true
 	return result
+}
+
+// ConvertFileWithPipeline converts a patch using the format-aware pipeline.
+// It detects input and output formats, applies appropriate transformations,
+// and writes the output using the correct format handler.
+func ConvertFileWithPipeline(inputPath, outputPath string, opts Options) Result {
+	result := Result{
+		InputPath:  inputPath,
+		OutputPath: outputPath,
+	}
+
+	// Skip existence check for in-place conversion
+	inPlace := inputPath == outputPath
+	if !opts.Overwrite && !inPlace {
+		if _, err := os.Stat(outputPath); err == nil {
+			result.Error = fmt.Errorf("output file already exists: %s (use --overwrite to replace)", outputPath)
+			return result
+		}
+	}
+
+	// Detect input format
+	inputData, inputFmt, err := detectInputFormat(inputPath)
+	if err != nil {
+		result.Error = fmt.Errorf("failed to detect input format: %w", err)
+		return result
+	}
+
+	// Detect output format
+	outputFmt := DetectFormatFromExtension(outputPath)
+	if outputFmt.IsUnknown() {
+		outputFmt = FormatVCV2 // Default to v2
+	}
+
+	// Skip if same format and no conversion needed
+	if inputFmt == outputFmt && inputFmt.IsV2() {
+		result.Skipped = true
+		return result
+	}
+
+	// Parse JSON
+	root, err := FromJSON(inputData)
+	if err != nil {
+		result.Error = err
+		return result
+	}
+
+	var issues []string
+
+	// Normalize input format
+	switch inputFmt {
+	case FormatVCV2:
+		if err := NormalizeV2(root, &issues); err != nil {
+			result.Error = err
+			result.Issues = issues
+			return result
+		}
+	case FormatMiRack:
+		if err := NormalizeMiRack(root, &issues); err != nil {
+			result.Error = err
+			result.Issues = issues
+			return result
+		}
+	case FormatVCV06:
+		// V0.6 uses same transformation as MiRack for now
+		if err := NormalizeMiRack(root, &issues); err != nil {
+			result.Error = err
+			result.Issues = issues
+			return result
+		}
+	}
+
+	// Denormalize to output format
+	switch outputFmt {
+	case FormatVCV2:
+		if err := DenormalizeV2(root, &issues); err != nil {
+			result.Error = err
+			result.Issues = issues
+			return result
+		}
+	case FormatMiRack:
+		if err := DenormalizeMiRack(root, &issues); err != nil {
+			result.Error = err
+			result.Issues = issues
+			return result
+		}
+	}
+
+	result.Issues = issues
+
+	// Serialize JSON
+	patchJSON, err := ToJSON(root)
+	if err != nil {
+		result.Error = fmt.Errorf("failed to serialize JSON: %w", err)
+		return result
+	}
+
+	// Create output directory
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
+		result.Error = fmt.Errorf("failed to create output directory: %w", err)
+		return result
+	}
+
+	// Write output using format handler
+	outputHandler := GetFormatHandler(outputFmt)
+	if err := outputHandler.Write(patchJSON, outputPath); err != nil {
+		result.Error = err
+		return result
+	}
+
+	result.Success = true
+	return result
+}
+
+// detectInputFormat detects the format of the input file and returns the data and format.
+func detectInputFormat(inputPath string) ([]byte, Format, error) {
+	// Try MiRack handler first (for .mrk bundles)
+	mrkHandler := &MiRackHandler{}
+	data, err := mrkHandler.Read(inputPath)
+	if err == nil {
+		return data, FormatMiRack, nil
+	}
+
+	// Try default handler
+	defaultHandler := &DefaultFormatHandler{}
+	data, err = defaultHandler.Read(inputPath)
+	if err != nil {
+		return nil, FormatUnknown, fmt.Errorf("failed to read input: %w", err)
+	}
+
+	// Check if it's v2 or v0.6
+	if IsV2Format(data) {
+		return data, FormatVCV2, nil
+	}
+
+	// Default to v0.6 for remaining .vcv files
+	return data, FormatVCV06, nil
+}
+
+// DetectFormatFromExtension detects format from file extension.
+func DetectFormatFromExtension(path string) Format {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".mrk":
+		return FormatMiRack
+	case ".vcv":
+		return FormatVCV2 // Could be v0.6 or v2, default to v2
+	default:
+		return FormatUnknown
+	}
 }
 
 func ConvertDirectory(inputDir, outputDir string, opts Options) []Result {
