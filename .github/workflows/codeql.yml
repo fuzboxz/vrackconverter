@@ -36,8 +36,10 @@ jobs:
         uses: github/codeql-action/init@v4
         with:
           languages: go, actions
-          build-mode: autobuild
           queries: security-extended,security-and-quality
+
+      - name: Build for CodeQL analysis
+        run: make build
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
