@@ -18,6 +18,7 @@ type Result struct {
 	OutputPath string
 	Issues     []string
 	Success    bool
+	Skipped    bool // True when file was already in v2 format
 	Error      error
 }
 
@@ -39,6 +40,12 @@ func ConvertFile(inputPath, outputPath string, opts Options) Result {
 	data, err := os.ReadFile(inputPath)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to read input file: %w", err)
+		return result
+	}
+
+	// Check if file is already v2 format
+	if IsV2Format(data) {
+		result.Skipped = true
 		return result
 	}
 
@@ -88,20 +95,44 @@ func ConvertDirectory(inputDir, outputDir string, opts Options) []Result {
 		return results
 	}
 
+	// Auto-create output directory if it doesn't exist
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		results = append(results, Result{
+			InputPath: inputDir,
+			Error:     fmt.Errorf("failed to create output directory: %w", err),
+		})
+		return results
+	}
+
 	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-
 		name := entry.Name()
-		if !strings.HasSuffix(strings.ToLower(name), ".vcv") {
+		ext := strings.ToLower(filepath.Ext(name))
+
+		// Skip non-.mrk directories (they could be anything)
+		if entry.IsDir() && ext != ".mrk" {
 			continue
 		}
 
-		inputPath := filepath.Join(inputDir, name)
-		outputPath := filepath.Join(outputDir, name)
+		// Process only .vcv files and .mrk directory bundles
+		if ext != ".vcv" && ext != ".mrk" {
+			continue
+		}
 
-		result := ConvertFile(inputPath, outputPath, opts)
+		var actualInputPath, actualOutputPath string
+
+		if ext == ".mrk" {
+			// .mrk is a directory bundle containing patch.vcv
+			actualInputPath = filepath.Join(inputDir, name, "patch.vcv")
+			// Output becomes .vcv with same base name
+			baseName := name[:len(name)-len(filepath.Ext(name))]
+			actualOutputPath = filepath.Join(outputDir, baseName+".vcv")
+		} else {
+			// Regular .vcv file
+			actualInputPath = filepath.Join(inputDir, name)
+			actualOutputPath = filepath.Join(outputDir, name)
+		}
+
+		result := ConvertFile(actualInputPath, actualOutputPath, opts)
 		results = append(results, result)
 	}
 

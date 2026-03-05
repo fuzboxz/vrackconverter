@@ -39,12 +39,14 @@ Usage:
   vrackconverter <input> -o <output>     # Convert to new file
   vrackconverter <input> --overwrite     # Overwrite input file in place
   vrackconverter <input.mrk>             # Auto-create .vcv (never modifies .mrk)
+  vrackconverter <dir-with-mrk>         # Auto-creates .vcv in same directory
+  vrackconverter <dir> -o <output>       # Batch convert directory
 
 Arguments:
-  <input>    Input .vcv or .mrk file
+  <input>    Input .vcv or .mrk file, or directory
 
 Flags:
-  -o, --output <path>    Output file (if not specified, requires --overwrite)
+  -o, --output <path>    Output file/directory (if not specified, requires --overwrite)
       --overwrite        Overwrite input file in place
       --mm               Add 4ms HubMedium (MetaModule) to patch
   -q, --quiet            Suppress non-error output
@@ -56,11 +58,40 @@ Examples:
   vrackconverter old-patch.vcv --overwrite
   vrackconverter my-patch.mrk                      # Creates my-patch.vcv
   vrackconverter my-patch.mrk -o converted.vcv
+  vrackconverter ./mrk-patches/                    # Creates .vcv alongside .mrk
+  vrackconverter ./patches/ -o ./converted/        # Batch with output dir
 `)
 }
 
 func isMrkFile(path string) bool {
 	return strings.ToLower(filepath.Ext(path)) == ".mrk"
+}
+
+// directoryContainsMrkFiles detects if directory contains .mrk files but not .vcv files.
+// This determines whether to auto-generate output for .mrk directories.
+func directoryContainsMrkFiles(dirPath string) bool {
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
+		return false
+	}
+
+	hasMrk, hasVcv := false, false
+	for _, e := range entries {
+		if e.IsDir() {
+			// Check for .mrk bundle directories
+			if strings.ToLower(filepath.Ext(e.Name())) == ".mrk" {
+				hasMrk = true
+			}
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(e.Name()))
+		if ext == ".mrk" {
+			hasMrk = true
+		} else if ext == ".vcv" {
+			hasVcv = true
+		}
+	}
+	return hasMrk && !hasVcv
 }
 
 func main() {
@@ -115,7 +146,14 @@ func main() {
 
 	inputPath := positionalArgs[0]
 
-	// Handle .mrk files specially - never overwrite, auto-generate .vcv name
+	opts := converter.Options{
+		Overwrite:  overwrite,
+		Quiet:      quiet,
+		MetaModule: metamodule,
+	}
+
+	// Check for .mrk bundles BEFORE directory check, since .mrk bundles are directories
+	// but should be treated as single files for conversion
 	if isMrkFile(inputPath) {
 		// .mrk is a directory bundle - look for patch.vcv inside
 		mrkPath := inputPath
@@ -136,31 +174,46 @@ func main() {
 		}
 		// Note: .mrk files themselves are never modified since outputPath != inputPath
 		// The --overwrite flag controls whether the auto-generated .vcv can be overwritten
-	} else {
-		// For non-.mrk files
-		if outputPath == "" && !overwrite {
-			fmt.Fprintln(os.Stderr, "error: must specify -o <output> or --overwrite")
-			fmt.Fprintln(os.Stderr, "  (to convert in place and overwrite the input file)")
-			printUsage()
-			os.Exit(1)
-		}
-		if outputPath == "" && overwrite {
-			// In-place conversion: output = input
-			outputPath = inputPath
-		}
-	}
-
-	opts := converter.Options{
-		Overwrite:  overwrite,
-		Quiet:      quiet,
-		MetaModule: metamodule,
-	}
-
-	if converter.IsDirectory(inputPath) {
-		convertDirectory(inputPath, outputPath, opts)
-	} else {
 		convertFile(inputPath, outputPath, opts)
+		return
 	}
+
+	// Check if input is a directory (for batch conversion of .vcv or .mrk files)
+	if converter.IsDirectory(inputPath) {
+		// Directory handling
+		if outputPath == "" && !overwrite {
+			// Check if directory contains .mrk files (but not .vcv files)
+			if directoryContainsMrkFiles(inputPath) {
+				// Auto-generate output: convert in place (creates .vcv next to .mrk)
+				outputPath = inputPath
+				if !quiet {
+					fmt.Fprintf(os.Stderr, "info: .mrk directory detected, creating .vcv files in same directory\n")
+				}
+			} else {
+				// .vcv directory requires explicit output
+				fmt.Fprintln(os.Stderr, "error: must specify -o <output> or --overwrite for .vcv directories")
+				printUsage()
+				os.Exit(1)
+			}
+		}
+		convertDirectory(inputPath, outputPath, opts)
+		return
+	}
+
+	// For non-.mrk files
+	if outputPath == "" && !overwrite {
+		fmt.Fprintln(os.Stderr, "error: must specify -o <output> or --overwrite")
+		fmt.Fprintln(os.Stderr, "  (to convert in place and overwrite the input file)")
+		printUsage()
+		os.Exit(1)
+	}
+	if outputPath == "" && overwrite {
+		// In-place conversion: output = input
+		outputPath = inputPath
+	}
+
+	// Single file conversion
+	convertFile(inputPath, outputPath, opts)
 }
 
 func convertFile(inputPath, outputPath string, opts converter.Options) {
@@ -173,6 +226,11 @@ func convertFile(inputPath, outputPath string, opts converter.Options) {
 	}
 
 	result := converter.ConvertFile(inputPath, outputPath, opts)
+	if result.Skipped {
+		// File is already v2 format - informational, not an error
+		fmt.Fprintf(os.Stderr, "info: file is already in VCV Rack v2 format (no conversion needed)\n")
+		os.Exit(0)
+	}
 	if !result.Success {
 		fmt.Fprintf(os.Stderr, "error: %v\n", result.Error)
 		os.Exit(1)
@@ -197,13 +255,19 @@ func convertDirectory(inputDir, outputDir string, opts converter.Options) {
 	results := converter.ConvertDirectory(inputDir, outputDir, opts)
 
 	successCount := 0
+	skipCount := 0
 	failCount := 0
 
 	for _, result := range results {
-		if result.Success {
+		relPath, _ := filepath.Rel(inputDir, result.InputPath)
+		if result.Skipped {
+			skipCount++
+			if !opts.Quiet {
+				fmt.Printf("  ⊘ %s (already v2)\n", relPath)
+			}
+		} else if result.Success {
 			successCount++
 			if !opts.Quiet {
-				relPath, _ := filepath.Rel(inputDir, result.InputPath)
 				fmt.Printf("  ✓ %s\n", relPath)
 				if len(result.Issues) > 0 {
 					for _, issue := range result.Issues {
@@ -213,13 +277,16 @@ func convertDirectory(inputDir, outputDir string, opts converter.Options) {
 			}
 		} else {
 			failCount++
-			relPath, _ := filepath.Rel(inputDir, result.InputPath)
 			fmt.Fprintf(os.Stderr, "  ✗ %s: %v\n", relPath, result.Error)
 		}
 	}
 
 	if !opts.Quiet {
-		fmt.Printf("\nComplete: %d succeeded, %d failed\n", successCount, failCount)
+		if skipCount > 0 {
+			fmt.Printf("\nComplete: %d succeeded, %d skipped, %d failed\n", successCount, skipCount, failCount)
+		} else {
+			fmt.Printf("\nComplete: %d succeeded, %d failed\n", successCount, failCount)
+		}
 	}
 
 	if failCount > 0 {

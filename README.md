@@ -37,6 +37,12 @@ vrackconverter <input.mrk>             # Auto-create .vcv (never modifies .mrk)
 | `-V, --version` | Show version |
 | `-h, --help` | Show help |
 
+### Behavior
+
+- **v2 files**: If a file is already in VCV Rack v2 format, it will be detected and skipped with an informational message
+- **Mixed directories**: When converting directories, v2 files are shown as skipped and don't cause the operation to fail
+- **Exit codes**: `0` = success (including skipped files), `1` = error
+
 ### Examples
 
 ```bash
@@ -57,6 +63,10 @@ vrackconverter old-patch.vcv -o new-patch.vcv --mm
 
 # Convert a directory of patches
 vrackconverter ./patches/ -o ./converted/
+
+# v2 files are detected and skipped gracefully
+vrackconverter already-v2.vcv -o output.vcv
+# info: file is already in VCV Rack v2 format (no conversion needed)
 ```
 
 ## Credits & Thanks
