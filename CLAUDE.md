@@ -45,6 +45,38 @@ make install        # Install to $GOPATH/bin or /usr/local/bin
 VERSION=1.0.0 make build
 ```
 
+### Commit Message Convention
+
+**Format**: `type: description`
+
+**Types**:
+- `feat:` - New features
+- `fix:` - Bug fixes
+- `docs:` - Documentation changes
+- `test:` - Test changes
+- `refactor:` - Code refactoring
+- `chore:` - Maintenance tasks
+
+**Structure**: List new features first, then bug fixes
+
+```bash
+feat: add batch directory conversion and v2 format detection
+
+Features:
+- Add directory/batch conversion support
+  - Convert all patches in a directory at once
+  - Auto-detect .mrk directories and create .vcv alongside
+  - Support mixed directories with .vcv and .mrk files
+- Add v2 format detection with graceful skip
+  - Detect by version field, not compression format
+  - Show info message and exit 0 for already-v2 files
+  - Distinguish "skipped" from "failed" in directory output
+
+Fixes:
+- Fix v2 detection to check version instead of zstd magic bytes
+  - Both v0.6 and v2 use zstd tar, must check version field
+```
+
 ---
 
 ## Coding Standards
@@ -143,7 +175,7 @@ vrackconverter/
 │   │   ├── converter.go     # File/directory conversion orchestration
 │   │   ├── transform.go     # Core patch transformation logic
 │   │   ├── metamodule.go    # MetaModule (HubMedium) module creation
-│   │   ├── archive.go       # v0.6 JSON ↔ v2 tar archive handling
+│   │   ├── archive.go       # v0.6 JSON ↔ v2 tar archive handling, v2 format detection
 │   │   └── transform_test.go # Transformation tests
 │   └── patch/
 │       └── patch.go         # Shared data structures (Patch, Module, Cable)
@@ -153,9 +185,11 @@ vrackconverter/
 ### Data Flow
 
 ```
-input.vcv (v0.6 JSON)
+input.vcv (v0.6 JSON or v2 archive)
     ↓
-ConvertFile() reads JSON
+ConvertFile() reads file bytes
+    ↓
+[IsV2Format() check] ← If zstd magic bytes present, set Skipped=true
     ↓
 FromJSON() → map[string]any
     ↓
@@ -338,21 +372,21 @@ Some modules have different port numbering between MiRack and VCV Rack 2.
 
 ## MetaModule Support
 
-The `--mm` flag adds a 4ms MetaModule module to converted patches. This enables preset mapping and modular storage functionality.
+The `-m, --metamodule` flag adds a 4ms MetaModule module to converted patches. This enables preset mapping and modular storage functionality.
 
 **Note**: In VCV Rack, the 4ms MetaModule module is called "HubMedium" (plugin: "4msCompany", model: "HubMedium"). The code uses this internal name, but the feature is referred to as "MetaModule" in user-facing documentation.
 
 ### How It Works
 
-1. **Module Addition**: When `--mm` is specified, a HubMedium module is added to the output patch
-2. **Positioning**: HubMedium is placed immediately after the rightmost module at Y=0 (top row)
-3. **Patch Name**: Uses the input filename (without extension) as the patch name in HubMedium
+1. **Module Addition**: When `--metamodule` is specified, a MetaModule (HubMedium) module is added to the output patch
+2. **Positioning**: MetaModule is placed immediately after the rightmost module at Y=0 (top row)
+3. **Patch Name**: Uses the input filename (without extension) as the patch name in MetaModule
 
 ### Usage
 
 ```bash
-vrackconverter input.vcv -o output.vcv --mm
-vrackconverter input.mrk --mm  # Auto-generates .vcv with MetaModule
+vrackconverter input.vcv -o output.vcv --metamodule
+vrackconverter input.mrk -m  # Auto-generates .vcv with MetaModule
 ```
 
 ### Implementation
@@ -441,15 +475,89 @@ func TestArrayIndexConversion(t *testing.T) {
 2. Verify the index-to-ID mapping is correct
 3. Check module order hasn't changed during conversion
 
+## V2 Format Detection
+
+### How It Works
+
+The app detects v2 format by **checking the version field** in the patch JSON, not by compression format.
+
+**Critical**: Both VCV Rack v0.6 and v2 use zstd-compressed tar archives. Detection must be by version number:
+- v0.6 patches have version "0.x.x" (e.g., "0.6.2")
+- v2 patches have version "2.x.x" (e.g., "2.6.6")
+
+**File formats:**
+- **MiRack (.mrk)**: Directory bundle containing plain JSON `patch.vcv` file
+- **VCV Rack v0.6**: Zstd-compressed tar archive with version "0.x.x"
+- **VCV Rack v2**: Zstd-compressed tar archive with version "2.x.x"
+
+The test files in `test/` are MiRack exports (plain JSON), not VCV Rack v0.6 exports.
+
+### Implementation
+
+Located in `internal/converter/archive.go`:
+
+```go
+// IsV2Format extracts the version field and checks if it starts with "2."
+func IsV2Format(data []byte) bool {
+    version, err := extractVersion(data)
+    if err != nil {
+        return false
+    }
+    return strings.HasPrefix(version, "2.")
+}
+
+// extractVersion handles both plain JSON and zstd-compressed tar archives
+func extractVersion(data []byte) (string, error) {
+    // 1. Try parsing as plain JSON
+    // 2. If that fails, try as zstd tar archive
+    // 3. Extract version from patch.json
+}
+```
+
+### Result States
+
+The `Result` struct has three possible states:
+
+| State | Success | Skipped | Error | Exit Code |
+|-------|---------|---------|-------|-----------|
+| Converted | true | false | nil | 0 |
+| Already v2 | false | true | nil | 0 |
+| Error | false | false | set | 1 |
+
+### CLI Behavior
+
+```bash
+# Single v2 file:
+$ ./vrackconverter already-v2.vcv -o output.vcv
+info: file is already in VCV Rack v2 format (no conversion needed)
+# Exit code: 0
+
+# Mixed directory:
+$ ./vrackconverter ./mixed/ -o ./output/
+Converting directory: ./mixed/ -> ./output/
+  ✓ v06-patch.vcv
+  ⊘ already-v2.vcv (already v2)
+
+Complete: 1 succeeded, 1 skipped, 0 failed
+# Exit code: 0
+```
+
 ## File Format Differences
 
-### v0.6 (MiRack)
-- File: Plain JSON
+### MiRack (.mrk bundles)
+- Structure: Directory containing `patch.vcv` (plain JSON)
 - Wires: Called "wires"
 - Module IDs: Optional
 - Cable refs: Array indices
 
-### v2.x (VCV Rack 2)
+### VCV Rack v0.6
+- File: Zstd-compressed tar archive (same format as v2)
+- Version: "0.x.x" in patch.json
+- Wires: Called "wires"
+- Module IDs: Optional
+- Cable refs: Array indices
+
+### VCV Rack v2.x
 - File: Zstd-compressed tar archive
 - Wires: Called "cables"
 - Module IDs: Required
