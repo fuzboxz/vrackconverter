@@ -152,17 +152,19 @@ jobs:
         run: |
           PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
 
-          printf "## What's Changed\n\n" > "$NOTES_FILE"
+          echo "## What's Changed" > "$NOTES_FILE"
+          echo "" >> "$NOTES_FILE"
           if [ -n "$PREV_TAG" ]; then
             git log "$PREV_TAG..HEAD" --pretty=format:"- %s" --no-merges | grep -vi 'claude' >> "$NOTES_FILE" || true
           else
-            printf "- Initial release\n" >> "$NOTES_FILE"
+            echo "- Initial release" >> "$NOTES_FILE"
           fi
 
           cat "$NOTES_FILE"
 
           gh release create '${{ github.ref_name }}' \
             --notes-file "$NOTES_FILE" \
+            -- \
             artifacts/**/*.tar.gz \
             artifacts/**/*.zip \
             artifacts/checksums.txt
