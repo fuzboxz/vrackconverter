@@ -294,7 +294,6 @@ var modelMappings = map[string]map[string]string{
 	// Example: "Core": {"AudioInterface": "AudioInterface2"},
 }
 
-
 // Port ID remappings for modules that changed between miRack and VCV Rack 2.
 // Format: "plugin/model": {portType: {oldID: newID}}
 // portType is "inputs" or "outputs"

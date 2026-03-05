@@ -32,31 +32,37 @@ build-all:
 	@echo "Building for all platforms..."
 	@mkdir -p $(BUILD_DIR)
 	@echo "Building linux/amd64..."
-	GOOS=linux GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-linux-amd64 $(CMD_DIR)
+	@mkdir -p $(BUILD_DIR)/vrackconverter-linux-amd64
+	GOOS=linux GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/vrackconverter-linux-amd64/$(BINARY_NAME) $(CMD_DIR)
+	tar -czf $(BUILD_DIR)/vrackconverter-linux-amd64.tar.gz -C $(BUILD_DIR) vrackconverter-linux-amd64
 	@echo "Building linux/arm64..."
-	GOOS=linux GOARCH=arm64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-linux-arm64 $(CMD_DIR)
+	@mkdir -p $(BUILD_DIR)/vrackconverter-linux-arm64
+	GOOS=linux GOARCH=arm64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/vrackconverter-linux-arm64/$(BINARY_NAME) $(CMD_DIR)
+	tar -czf $(BUILD_DIR)/vrackconverter-linux-arm64.tar.gz -C $(BUILD_DIR) vrackconverter-linux-arm64
 	@echo "Building darwin/amd64..."
-	GOOS=darwin GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-amd64 $(CMD_DIR)
+	@mkdir -p $(BUILD_DIR)/vrackconverter-darwin-amd64
+	GOOS=darwin GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/vrackconverter-darwin-amd64/$(BINARY_NAME) $(CMD_DIR)
+	tar -czf $(BUILD_DIR)/vrackconverter-darwin-amd64.tar.gz -C $(BUILD_DIR) vrackconverter-darwin-amd64
 	@echo "Building darwin/arm64..."
-	GOOS=darwin GOARCH=arm64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-arm64 $(CMD_DIR)
+	@mkdir -p $(BUILD_DIR)/vrackconverter-darwin-arm64
+	GOOS=darwin GOARCH=arm64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/vrackconverter-darwin-arm64/$(BINARY_NAME) $(CMD_DIR)
+	tar -czf $(BUILD_DIR)/vrackconverter-darwin-arm64.tar.gz -C $(BUILD_DIR) vrackconverter-darwin-arm64
 	@echo "Building windows/amd64..."
-	GOOS=windows GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-windows-amd64.exe $(CMD_DIR)
+	@mkdir -p $(BUILD_DIR)/vrackconverter-windows-amd64
+	GOOS=windows GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/vrackconverter-windows-amd64/$(BINARY_NAME).exe $(CMD_DIR)
+	cd $(BUILD_DIR)/vrackconverter-windows-amd64 && zip -q ../vrackconverter-windows-amd64.zip $(BINARY_NAME).exe
+	@echo "Building windows/arm64..."
+	@mkdir -p $(BUILD_DIR)/vrackconverter-windows-arm64
+	GOOS=windows GOARCH=arm64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/vrackconverter-windows-arm64/$(BINARY_NAME).exe $(CMD_DIR)
+	cd $(BUILD_DIR)/vrackconverter-windows-arm64 && zip -q ../vrackconverter-windows-arm64.zip $(BINARY_NAME).exe
 	@echo "All builds complete in $(BUILD_DIR)/"
 
 # Run tests
 .PHONY: test
 test:
 	@echo "Running tests..."
-	$(GOTEST) -v -race -coverprofile=coverage.txt ./...
+	$(GOTEST) -v -race ./...
 	@echo "Tests passed"
-
-# Run tests with coverage report
-.PHONY: test-coverage
-test-coverage:
-	@echo "Running tests with coverage..."
-	$(GOTEST) -v -race -coverprofile=coverage.txt -covermode=atomic ./...
-	$(GOCMD) tool coverage -html=coverage.txt -o coverage.html
-	@echo "Coverage report: coverage.html"
 
 # Format code
 .PHONY: fmt
@@ -86,8 +92,18 @@ clean:
 	@echo "Cleaning..."
 	rm -f $(BINARY_NAME)
 	rm -rf $(BUILD_DIR)
-	rm -f coverage.txt coverage.html
 	@echo "Clean complete"
+
+# Clean intermediate build directories (keep archives)
+.PHONY: clean-intermediate
+clean-intermediate:
+	@echo "Cleaning intermediate build directories..."
+	for dir in $(BUILD_DIR)/vrackconverter-linux-* $(BUILD_DIR)/vrackconverter-darwin-* $(BUILD_DIR)/vrackconverter-windows-*; do \
+		if [ -d "$$dir" ]; then \
+			rm -rf "$$dir"; \
+		fi; \
+	done
+	@echo "Intermediate directories cleaned"
 
 # Show version info
 .PHONY: version
@@ -98,11 +114,10 @@ version:
 
 # Generate SHA256 checksums for build artifacts
 .PHONY: checksums
-checksums: build-all
+checksums: build-all clean-intermediate
 	@echo "Generating SHA256 checksums..."
-	cd $(BUILD_DIR) && \
-		shasum -a 256 $$(ls $(BINARY_NAME)-* 2>/dev/null || ls $(BINARY_NAME)-*.exe 2>/dev/null) > checksums.txt && \
-		cat checksums.txt
+	cd $(BUILD_DIR) && shasum -a 256 *.tar.gz *.zip > checksums.txt
+	@cat $(BUILD_DIR)/checksums.txt
 	@echo "Checksums written to $(BUILD_DIR)/checksums.txt"
 
 # Show help
@@ -117,7 +132,6 @@ help:
 	@echo "  build         Build for current platform"
 	@echo "  build-all     Build for all platforms (linux, darwin, windows)"
 	@echo "  test          Run tests with verbose output"
-	@echo "  test-coverage Run tests and generate coverage report"
 	@echo "  fmt           Format Go code"
 	@echo "  vet           Run go vet"
 	@echo "  install       Install to $$GOPATH/bin or /usr/local/bin"
