@@ -139,8 +139,8 @@ jobs:
 
           # Create archive
           if [ "${{ matrix.goos }}" = "windows" ]; then
-            # Use zip for Windows
-            (cd "$ARCHIVE_NAME" && zip -q "../$ARCHIVE_NAME.zip" "vrackconverter$BINARY_EXT")
+            # Use PowerShell Compress-Archive for Windows (zip not in PATH)
+            powershell -Command "Compress-Archive -Path '$ARCHIVE_NAME' -DestinationPath '$ARCHIVE_NAME.zip'"
             echo "ARCHIVE_NAME=$ARCHIVE_NAME.zip" >> $GITHUB_ENV
           else
             # Use tar.gz for Unix
