@@ -1,0 +1,208 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*.*.*"
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go-version: ["1.21", "1.22"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: false
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: Run tests
+        run: go test -v -race -coverprofile=coverage.txt ./...
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        if: matrix.go-version == '1.22'
+        with:
+          file: ./coverage.txt
+          fail_ci_if_error: false
+          verbose: true
+
+  build:
+    name: Build
+    runs-on: ${{ matrix.os }}
+    needs: test
+    if: github.event_name != 'pull_request'
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+          - os: ubuntu-latest
+            goos: linux
+            goarch: arm64
+          - os: macos-latest
+            goos: darwin
+            goarch: amd64
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+          cache: false
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: Run tests
+        run: go test -race -coverprofile=coverage.txt ./...
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/heads/}-$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          fi
+        shell: bash
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          BINARY_NAME="vrackconverter-${{ matrix.goos }}-${{ matrix.goarch }}"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            BINARY_NAME="${BINARY_NAME}.exe"
+          fi
+          go build -ldflags "-X main.Version=$VERSION" -o "$BINARY_NAME" ./cmd/vrackconverter/
+          echo "BINARY_NAME=$BINARY_NAME" >> $GITHUB_ENV
+
+      - name: Generate SHA256 checksum
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            certutil -hashfile "$BINARY_NAME" SHA256 > checksum.txt
+            cat checksum.txt
+          else
+            shasum -a 256 "$BINARY_NAME" > checksum.txt
+            cat checksum.txt
+          fi
+        shell: bash
+
+      - name: Upload artifacts
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+        uses: actions/upload-artifact@v4
+        with:
+          name: vrackconverter-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            ${{ env.BINARY_NAME }}
+            checksum.txt
+          retention-days: 7
+
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - test
+      - build
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare checksums
+        run: |
+          cd artifacts
+          for dir in */; do
+            cat "${dir}checksum.txt" >> checksums.txt
+            # Format checksum line consistently
+            sed -i 's/SHA256 hash of //g' checksums.txt
+            sed -i 's/ successfully verified//g' checksums.txt
+          done
+          # Create proper checksum file with just filename and hash
+          > checksums.txt
+          for f in vrackconverter-*/*; do
+            if [ -f "$f" ] && [ "$(basename "$f")" != "checksum.txt" ]; then
+              sha256sum "$f" >> checksums.txt
+            fi
+          done
+          cat checksums.txt
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/vrackconverter-*/*
+            artifacts/checksums.txt
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

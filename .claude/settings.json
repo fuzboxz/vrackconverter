@@ -1,0 +1,10 @@
+{
+  "hooks": {
+    "PreRespond": [
+      {
+        "pattern": "write|edit|code|func|package|import",
+        "command": "make fmt && make vet"
+      }
+    ]
+  }
+}
