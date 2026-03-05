@@ -60,6 +60,27 @@ func TestMiRackHandler_Read(t *testing.T) {
 			t.Error("Expected error for non-existent path")
 		}
 	})
+
+	t.Run("returns error for v2 zstd archives", func(t *testing.T) {
+		handler := &MiRackHandler{}
+
+		// Create a v2 archive for testing
+		tmpDir := t.TempDir()
+		v2Path := filepath.Join(tmpDir, "test.vcv")
+		testJSON := []byte(`{"version": "2.6.6", "modules": [], "cables": []}`)
+		if err := CreateV2Patch(testJSON, v2Path); err != nil {
+			t.Fatalf("Failed to create v2 archive: %v", err)
+		}
+
+		// MiRackHandler should reject v2 archives
+		_, err := handler.Read(v2Path)
+		if err == nil {
+			t.Error("Expected error for v2 zstd archive")
+		}
+		if !strings.Contains(err.Error(), "zstd") {
+			t.Errorf("Error should mention zstd archive, got: %v", err)
+		}
+	})
 }
 
 // TestMiRackHandler_Write tests writing MiRack patches.

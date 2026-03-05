@@ -18,7 +18,16 @@ type FormatHandler interface {
 type DefaultFormatHandler struct{}
 
 func (h *DefaultFormatHandler) Read(path string) ([]byte, error) {
-	return os.ReadFile(path)
+	// For v2 archives, extract the JSON first
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	// If it's a zstd archive, extract JSON
+	if IsV2Format(data) {
+		return ExtractJSONFromV2(path)
+	}
+	return data, nil
 }
 
 func (h *DefaultFormatHandler) Write(data []byte, path string) error {
@@ -140,6 +149,15 @@ func ConvertFileWithPipeline(inputPath, outputPath string, opts Options) Result 
 		return result
 	}
 
+	// For v2 archives, extract JSON first
+	if inputFmt.IsV2() {
+		inputData, err = ExtractJSONFromV2(inputPath)
+		if err != nil {
+			result.Error = fmt.Errorf("failed to extract JSON from v2 archive: %w", err)
+			return result
+		}
+	}
+
 	// Detect output format
 	outputFmt := DetectFormatFromExtension(outputPath)
 	if outputFmt.IsUnknown() {
@@ -235,20 +253,23 @@ func detectInputFormat(inputPath string) ([]byte, Format, error) {
 		return data, FormatMiRack, nil
 	}
 
-	// Try default handler
-	defaultHandler := &DefaultFormatHandler{}
-	data, err = defaultHandler.Read(inputPath)
+	// Check if .vcv file is v2 or v0.6 format
+	rawData, err := os.ReadFile(inputPath)
 	if err != nil {
 		return nil, FormatUnknown, fmt.Errorf("failed to read input: %w", err)
 	}
 
-	// Check if it's v2 or v0.6
-	if IsV2Format(data) {
-		return data, FormatVCV2, nil
+	if IsV2Format(rawData) {
+		// Extract JSON from v2 archive
+		jsonData, err := ExtractJSONFromV2(inputPath)
+		if err != nil {
+			return nil, FormatUnknown, fmt.Errorf("failed to extract JSON from v2 archive: %w", err)
+		}
+		return jsonData, FormatVCV2, nil
 	}
 
-	// Default to v0.6 for remaining .vcv files
-	return data, FormatVCV06, nil
+	// Assume v0.6 format (plain JSON)
+	return rawData, FormatVCV06, nil
 }
 
 // DetectFormatFromExtension detects format from file extension.
@@ -258,7 +279,15 @@ func DetectFormatFromExtension(path string) Format {
 	case ".mrk":
 		return FormatMiRack
 	case ".vcv":
-		return FormatVCV2 // Could be v0.6 or v2, default to v2
+		// Could be v0.6 or v2 - need to check content
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return FormatVCV2 // Default assumption
+		}
+		if IsV2Format(data) {
+			return FormatVCV2
+		}
+		return FormatVCV06
 	default:
 		return FormatUnknown
 	}

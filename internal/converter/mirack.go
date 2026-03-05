@@ -13,6 +13,8 @@ type MiRackHandler struct{}
 // Read reads a MiRack patch from path.
 // For .mrk bundles, path is the directory, and we read path/patch.vcv.
 // For direct .vcv files (inside .mrk), path is the file itself.
+//
+// Returns error if the file is not a valid MiRack patch (e.g., it's a zstd archive).
 func (h *MiRackHandler) Read(path string) ([]byte, error) {
 	// Check if path is a directory (.mrk bundle)
 	info, err := os.Stat(path)
@@ -32,6 +34,12 @@ func (h *MiRackHandler) Read(path string) ([]byte, error) {
 	data, err := os.ReadFile(actualPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read MiRack patch: %w", err)
+	}
+
+	// Validate that this is actually a MiRack patch (plain JSON).
+	// VCV Rack v2 files are zstd archives (start with 0xFD2FB528).
+	if len(data) >= 4 && data[0] == 0x28 && data[1] == 0xB5 && data[2] == 0x2F && data[3] == 0xFD {
+		return nil, fmt.Errorf("file is a zstd archive (VCV Rack v2), not a MiRack patch")
 	}
 
 	return data, nil

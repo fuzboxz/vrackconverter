@@ -409,3 +409,195 @@ func TestE2E_SkipV2Format(t *testing.T) {
 		t.Errorf("expected no error for skipped v2 file, got: %v", result.Error)
 	}
 }
+
+// TestE2E_V2ToMiRack tests V2 → MiRack conversion using the format-aware pipeline.
+func TestE2E_V2ToMiRack(t *testing.T) {
+
+	// Use existing MiRack test file and convert it to V2 first
+	mrkPath := filepath.Join(testDataDir(), "mirackoutput.mrk")
+	mrkPatchPath := filepath.Join(mrkPath, "patch.vcv")
+
+	// Read original MiRack patch
+	originalData, err := os.ReadFile(mrkPatchPath)
+	if err != nil {
+		t.Fatalf("failed to read MiRack patch: %v", err)
+	}
+
+	// Parse and transform to V2 format
+	patch, err := converter.FromJSON(originalData)
+	if err != nil {
+		t.Fatalf("failed to parse MiRack patch: %v", err)
+	}
+
+	var issues []string
+	if err := converter.TransformPatch(patch, "2.6.6", &issues, converter.Options{}, mrkPatchPath); err != nil {
+		t.Fatalf("failed to transform patch: %v", err)
+	}
+
+	v2JSON, err := converter.ToJSON(patch)
+	if err != nil {
+		t.Fatalf("failed to serialize V2 patch: %v", err)
+	}
+
+	// Create V2 archive
+	tmpDir := t.TempDir()
+	v2Path := filepath.Join(tmpDir, "intermediate.vcv")
+	if err := converter.CreateV2Patch(v2JSON, v2Path); err != nil {
+		t.Fatalf("failed to create v2 patch: %v", err)
+	}
+
+	// Verify v2 file was created
+	if _, err := os.Stat(v2Path); err != nil {
+		t.Fatalf("v2 file not created: %v", err)
+	}
+
+	// Now convert V2 → MiRack using the format-aware pipeline
+	mrkPath2 := filepath.Join(tmpDir, "output.mrk")
+	opts := converter.Options{Quiet: true}
+	result := converter.ConvertFileWithPipeline(v2Path, mrkPath2, opts)
+
+	if result.Error != nil {
+		t.Fatalf("V2 → MiRack conversion failed: %v", result.Error)
+	}
+	if !result.Success {
+		t.Fatal("conversion not successful")
+	}
+
+	// Verify .mrk bundle structure
+	info, err := os.Stat(mrkPath2)
+	if err != nil {
+		t.Fatalf("failed to stat .mrk bundle: %v", err)
+	}
+	if !info.IsDir() {
+		t.Error(".mrk output should be a directory")
+	}
+
+	// Verify patch.vcv exists inside
+	patchVcvPath := filepath.Join(mrkPath2, "patch.vcv")
+	if _, err := os.Stat(patchVcvPath); err != nil {
+		t.Errorf("patch.vcv not found in .mrk bundle: %v", err)
+	}
+
+	// Read the converted MiRack patch
+	mrkData, err := os.ReadFile(patchVcvPath)
+	if err != nil {
+		t.Fatalf("failed to read patch.vcv: %v", err)
+	}
+
+	mrkPatch, err := converter.FromJSON(mrkData)
+	if err != nil {
+		t.Fatalf("failed to parse MiRack patch: %v", err)
+	}
+
+	// Verify it's in MiRack format
+	// Version should be 0.6.x
+	if version, ok := mrkPatch["version"].(string); ok {
+		if !strings.HasPrefix(version, "0.6") {
+			t.Errorf("expected version 0.6.x, got: %s", version)
+		}
+	} else {
+		t.Error("MiRack patch missing version")
+	}
+
+	// Should have "wires" not "cables"
+	if _, ok := mrkPatch["wires"]; !ok {
+		t.Error("MiRack patch should have 'wires' key")
+	}
+	if _, ok := mrkPatch["cables"]; ok {
+		t.Error("MiRack patch should not have 'cables' key")
+	}
+}
+
+// TestE2E_MiRackToV2Roundtrip tests MiRack → V2 → MiRack conversion.
+func TestE2E_MiRackToV2Roundtrip(t *testing.T) {
+	// Start with a MiRack patch
+	mrkPath := filepath.Join(testDataDir(), "mirackoutput.mrk")
+	mrkPatchPath := filepath.Join(mrkPath, "patch.vcv")
+
+	mrkData, err := os.ReadFile(mrkPatchPath)
+	if err != nil {
+		t.Fatalf("failed to read MiRack patch: %v", err)
+	}
+
+	originalPatch, err := converter.FromJSON(mrkData)
+	if err != nil {
+		t.Fatalf("failed to parse MiRack patch: %v", err)
+	}
+
+	// Get original module count (for comparison)
+	originalModules, ok := originalPatch["modules"].([]any)
+	if !ok {
+		t.Fatal("MiRack patch missing modules")
+	}
+	originalModuleCount := len(originalModules)
+
+	// Get original wire count
+	originalWires, ok := originalPatch["wires"].([]any)
+	if !ok {
+		t.Fatal("MiRack patch missing wires")
+	}
+	originalWireCount := len(originalWires)
+
+	// Step 1: MiRack → V2 (create v2 archive)
+	tmpDir := t.TempDir()
+	var issues []string
+	if err := converter.TransformPatch(originalPatch, "2.6.6", &issues, converter.Options{}, mrkPatchPath); err != nil {
+		t.Fatalf("failed to transform patch: %v", err)
+	}
+
+	v2JSON, err := converter.ToJSON(originalPatch)
+	if err != nil {
+		t.Fatalf("failed to serialize V2 patch: %v", err)
+	}
+
+	v2Path := filepath.Join(tmpDir, "intermediate.vcv")
+	if err := converter.CreateV2Patch(v2JSON, v2Path); err != nil {
+		t.Fatalf("failed to create v2 patch: %v", err)
+	}
+
+	// Step 2: V2 → MiRack using format-aware pipeline
+	mrkPath2 := filepath.Join(tmpDir, "roundtrip.mrk")
+	opts := converter.Options{Quiet: true}
+	result := converter.ConvertFileWithPipeline(v2Path, mrkPath2, opts)
+
+	if result.Error != nil {
+		t.Fatalf("V2 → MiRack failed: %v", result.Error)
+	}
+
+	// Verify roundtrip preservation
+	mrkPatchPath2 := filepath.Join(mrkPath2, "patch.vcv")
+	mrkData2, err := os.ReadFile(mrkPatchPath2)
+	if err != nil {
+		t.Fatalf("failed to read roundtrip MiRack patch: %v", err)
+	}
+
+	roundtripPatch, err := converter.FromJSON(mrkData2)
+	if err != nil {
+		t.Fatalf("failed to parse roundtrip MiRack patch: %v", err)
+	}
+
+	// Verify module count preserved
+	roundtripModules, ok := roundtripPatch["modules"].([]any)
+	if !ok {
+		t.Fatal("roundtrip patch missing modules")
+	}
+	if len(roundtripModules) != originalModuleCount {
+		t.Errorf("module count changed: %d → %d", originalModuleCount, len(roundtripModules))
+	}
+
+	// Verify wire count preserved
+	roundtripWires, ok := roundtripPatch["wires"].([]any)
+	if !ok {
+		t.Fatal("roundtrip patch missing wires")
+	}
+	if len(roundtripWires) != originalWireCount {
+		t.Errorf("wire count changed: %d → %d", originalWireCount, len(roundtripWires))
+	}
+
+	// Verify version is 0.6.x
+	if version, ok := roundtripPatch["version"].(string); ok {
+		if !strings.HasPrefix(version, "0.6") {
+			t.Errorf("roundtrip version should be 0.6.x, got: %s", version)
+		}
+	}
+}
