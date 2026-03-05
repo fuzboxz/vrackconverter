@@ -26,7 +26,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
+          go-version: "1.23"
           cache: false
 
       - name: Cache Go modules
@@ -39,44 +39,25 @@ jobs:
           key: go-${{ runner.os }}-${{ github.event_name }}-${{ hashFiles('go.sum') }}
           restore-keys: |
             go-${{ runner.os }}-push-
-          enableCrossOsArchive: true
 
       - name: Download dependencies
         run: go mod download
-        env:
-          GOPROXY: direct  # Bypass proxy, fetch directly from source
 
       - name: Verify dependencies
         run: go mod verify
-
-      - name: Check for unexpected go.sum changes in PR
-        if: github.event_name == 'pull_request'
-        run: |
-          git diff origin/main -- go.sum
-          if [ $? -eq 0 ]; then
-            echo "::warning::go.sum was modified in this PR. Ensure this is intentional."
-          fi
 
       - name: Build binary (required for CLI integration tests)
         run: go build -ldflags "-X main.Version=dev" -o vrackconverter ./cmd/vrackconverter/
 
       - name: Run tests
-        run: go test -v -race -coverprofile=coverage.txt ./...
-
-      - name: Upload coverage
-        uses: codecov/codecov-action@v4
-        if: github.repository == 'fuzboxz/vrackconverter'
-        with:
-          file: ./coverage.txt
-          fail_ci_if_error: false
-          verbose: true
+        run: go test -v -race ./...
 
   build:
     name: Build
     runs-on: ${{ matrix.os }}
     needs: test
-    # Only run on canonical repo, not forks
-    if: github.repository == 'fuzboxz/vrackconverter' && github.event_name != 'pull_request'
+    # Only run on canonical repo for releases
+    if: github.repository == 'fuzboxz/vrackconverter' && startsWith(github.ref, 'refs/tags/v')
     strategy:
       matrix:
         include:
@@ -95,6 +76,9 @@ jobs:
           - os: windows-latest
             goos: windows
             goarch: amd64
+          - os: windows-latest
+            goos: windows
+            goarch: arm64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -104,7 +88,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
+          go-version: "1.23"
           cache: false
 
       - name: Cache Go modules
@@ -113,22 +97,15 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          # PRs get isolated cache scope, never shared with main branch
           key: go-${{ runner.os }}-${{ github.event_name }}-${{ hashFiles('go.sum') }}
           restore-keys: |
             go-${{ runner.os }}-push-
-          enableCrossOsArchive: true
 
       - name: Download dependencies
         run: go mod download
-        env:
-          GOPROXY: direct  # Bypass proxy, fetch directly from source
 
       - name: Verify dependencies
         run: go mod verify
-
-      - name: Run tests
-        run: go test -race -coverprofile=coverage.txt ./...
 
       - name: Determine version
         id: version
@@ -147,33 +124,37 @@ jobs:
           CGO_ENABLED: 0
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          BINARY_NAME="vrackconverter-${{ matrix.goos }}-${{ matrix.goarch }}"
+          ARCHIVE_NAME="vrackconverter-${{ matrix.goos }}-${{ matrix.goarch }}"
+          BINARY_EXT=""
           if [ "${{ matrix.goos }}" = "windows" ]; then
-            BINARY_NAME="${BINARY_NAME}.exe"
+            BINARY_EXT=".exe"
           fi
-          go build -ldflags "-X main.Version=$VERSION" -o "$BINARY_NAME" ./cmd/vrackconverter/
-          echo "BINARY_NAME=$BINARY_NAME" >> $GITHUB_ENV
 
-      - name: Generate SHA256 checksum
-        run: |
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            certutil -hashfile "$BINARY_NAME" SHA256 > checksum.txt
-            cat checksum.txt
+          # Create directory structure
+          mkdir -p "$ARCHIVE_NAME"
+
+          # Build binary with simple name
+          go build -ldflags "-X main.Version=$VERSION" -o "$ARCHIVE_NAME/vrackconverter$BINARY_EXT" ./cmd/vrackconverter/
+
+          # Create archive
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            # Use zip for Windows
+            (cd "$ARCHIVE_NAME" && zip -q "../$ARCHIVE_NAME.zip" "vrackconverter$BINARY_EXT")
+            echo "ARCHIVE_NAME=$ARCHIVE_NAME.zip" >> $GITHUB_ENV
           else
-            shasum -a 256 "$BINARY_NAME" > checksum.txt
-            cat checksum.txt
+            # Use tar.gz for Unix
+            tar -czf "$ARCHIVE_NAME.tar.gz" "$ARCHIVE_NAME"
+            echo "ARCHIVE_NAME=$ARCHIVE_NAME.tar.gz" >> $GITHUB_ENV
           fi
-        shell: bash
 
       - name: Upload artifacts
-        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+        # Only upload for tags, not for main branch pushes
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v4
         with:
           name: vrackconverter-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: |
-            ${{ env.BINARY_NAME }}
-            checksum.txt
-          retention-days: 7
+          path: ${{ env.ARCHIVE_NAME }}
+          retention-days: 90
 
   release:
     name: Release
@@ -199,30 +180,35 @@ jobs:
       - name: Prepare checksums
         run: |
           cd artifacts
-          for dir in */; do
-            cat "${dir}checksum.txt" >> checksums.txt
-            # Format checksum line consistently
-            sed -i 's/SHA256 hash of //g' checksums.txt
-            sed -i 's/ successfully verified//g' checksums.txt
-          done
-          # Create proper checksum file with just filename and hash
-          > checksums.txt
-          for f in vrackconverter-*/*; do
-            if [ -f "$f" ] && [ "$(basename "$f")" != "checksum.txt" ]; then
-              sha256sum "$f" >> checksums.txt
-            fi
-          done
+          # Generate checksums for all archive files
+          find . -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec sha256sum {} \; | sort > checksums.txt
           cat checksums.txt
 
       - name: Create release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            artifacts/vrackconverter-*/*
+        env:
+          NOTES_FILE: ${{ runner.temp }}/release-notes.txt
+        run: |
+          # Get commits since last tag, filter out test/CI changes and Claude commits
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+
+          {
+            printf "## What's Changed\n\n"
+            if [ -n "$PREV_TAG" ]; then
+              git log "$PREV_TAG..HEAD" --pretty=format:"- %s" --no-merges -- \
+                ':!.github' ':!Makefile' ':!**/*_test.go' ':!**/testdata/**' ':!*.md' \
+                | grep -vi 'claude' || printf "- Initial release\n"
+            else
+              printf "- Initial release\n"
+            fi
+          } > "$NOTES_FILE"
+
+          cat "$NOTES_FILE"
+
+          gh release create '${{ github.ref_name }}' \
+            --notes-file "$NOTES_FILE" \
+            artifacts/vrackconverter-*/*/*.tar.gz \
+            artifacts/vrackconverter-*/*/*.zip \
             artifacts/checksums.txt
-          draft: false
-          prerelease: false
-          generate_release_notes: true
-          fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
