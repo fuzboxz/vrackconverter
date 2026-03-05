@@ -8,8 +8,9 @@ import (
 )
 
 type Options struct {
-	Overwrite bool
-	Quiet     bool
+	Overwrite  bool
+	Quiet      bool
+	MetaModule bool // Add 4ms HubMedium module to output
 }
 
 type Result struct {
@@ -48,7 +49,7 @@ func ConvertFile(inputPath, outputPath string, opts Options) Result {
 	}
 
 	var issues []string
-	if err := TransformPatch(root, "2.6.6", &issues); err != nil {
+	if err := TransformPatch(root, "2.6.6", &issues, opts, inputPath); err != nil {
 		result.Error = err
 		result.Issues = issues
 		return result

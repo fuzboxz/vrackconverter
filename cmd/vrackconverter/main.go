@@ -16,6 +16,7 @@ var (
 	outputPath  string
 	overwrite   bool
 	quiet       bool
+	metamodule  bool
 )
 
 func init() {
@@ -28,6 +29,7 @@ func init() {
 	flag.BoolVar(&overwrite, "overwrite", false, "Overwrite input file in place")
 	flag.BoolVar(&quiet, "q", false, "Suppress non-error output")
 	flag.BoolVar(&quiet, "quiet", false, "Suppress non-error output")
+	flag.BoolVar(&metamodule, "mm", false, "Add 4ms HubMedium (MetaModule) to patch")
 }
 
 func printUsage() {
@@ -44,6 +46,7 @@ Arguments:
 Flags:
   -o, --output <path>    Output file (if not specified, requires --overwrite)
       --overwrite        Overwrite input file in place
+      --mm               Add 4ms HubMedium (MetaModule) to patch
   -q, --quiet            Suppress non-error output
   -V, --version          Show version
   -h, --help             Show this help
@@ -81,6 +84,8 @@ func main() {
 			overwrite = true
 		case "-q", "--quiet":
 			quiet = true
+		case "--mm":
+			metamodule = true
 		default:
 			// Keep positional args and unknown flags for flag.Parse()
 			cleanedArgs = append(cleanedArgs, arg)
@@ -146,8 +151,9 @@ func main() {
 	}
 
 	opts := converter.Options{
-		Overwrite: overwrite,
-		Quiet:     quiet,
+		Overwrite:  overwrite,
+		Quiet:      quiet,
+		MetaModule: metamodule,
 	}
 
 	if converter.IsDirectory(inputPath) {

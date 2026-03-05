@@ -142,6 +142,7 @@ vrackconverter/
 │   ├── converter/
 │   │   ├── converter.go     # File/directory conversion orchestration
 │   │   ├── transform.go     # Core patch transformation logic
+│   │   ├── metamodule.go    # MetaModule (HubMedium) module creation
 │   │   ├── archive.go       # v0.6 JSON ↔ v2 tar archive handling
 │   │   └── transform_test.go # Transformation tests
 │   └── patch/
@@ -334,6 +335,45 @@ cable["outputModuleId"] = wire["outputModuleId"]  // Still 0, 1, 2, etc.
 ## Port Number Mappings
 
 Some modules have different port numbering between MiRack and VCV Rack 2.
+
+## MetaModule Support
+
+The `--mm` flag adds a 4ms MetaModule module to converted patches. This enables preset mapping and modular storage functionality.
+
+**Note**: In VCV Rack, the 4ms MetaModule module is called "HubMedium" (plugin: "4msCompany", model: "HubMedium"). The code uses this internal name, but the feature is referred to as "MetaModule" in user-facing documentation.
+
+### How It Works
+
+1. **Module Addition**: When `--mm` is specified, a HubMedium module is added to the output patch
+2. **Positioning**: HubMedium is placed immediately after the rightmost module at Y=0 (top row)
+3. **Patch Name**: Uses the input filename (without extension) as the patch name in HubMedium
+
+### Usage
+
+```bash
+vrackconverter input.vcv -o output.vcv --mm
+vrackconverter input.mrk --mm  # Auto-generates .vcv with MetaModule
+```
+
+### Implementation
+
+Located in `internal/converter/metamodule.go`:
+
+```go
+// createHubMediumModule generates a HubMedium (4ms MetaModule) with:
+// - Plugin: "4msCompany", Model: "HubMedium"
+// - 14 parameters (12 knobs @ 0.5, 2 mode params @ 0)
+// - Default data structure with empty mappings
+// - Positioned at maxX + 1 (immediately after rightmost module)
+func createHubMediumModule(existingModules []any, root map[string]any, inputFilename string) map[string]any
+```
+
+### Notes
+
+- HubMedium is the 4ms MetaModule module in VCV Rack
+- The module is added silently (no warning message)
+- Patch name comes from filename since MiRack patches lack `name`/`description` fields
+- Position assumes 1 HP spacing; manual adjustment may be needed if modules overlap
 
 ### Example: Plaits
 
