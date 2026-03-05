@@ -11,16 +11,12 @@ on:
 permissions:
   contents: read
 
-# Ensure this only runs on the canonical repository
-env:
-  CANONICAL_REPO: fuzboxz/vrackconverter
-
 jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
     # Only run on canonical repo or PRs to it
-    if: github.repository == env.CANONICAL_REPO || github.event_name == 'pull_request'
+    if: github.repository == 'fuzboxz/vrackconverter' || github.event_name == 'pull_request'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -69,7 +65,7 @@ jobs:
 
       - name: Upload coverage
         uses: codecov/codecov-action@v4
-        if: github.repository == env.CANONICAL_REPO
+        if: github.repository == 'fuzboxz/vrackconverter'
         with:
           file: ./coverage.txt
           fail_ci_if_error: false
@@ -80,7 +76,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     needs: test
     # Only run on canonical repo, not forks
-    if: github.repository == env.CANONICAL_REPO && github.event_name != 'pull_request'
+    if: github.repository == 'fuzboxz/vrackconverter' && github.event_name != 'pull_request'
     strategy:
       matrix:
         include:
@@ -183,7 +179,7 @@ jobs:
     name: Release
     runs-on: ubuntu-latest
     # Only run on canonical repo tags
-    if: github.repository == env.CANONICAL_REPO && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: github.repository == 'fuzboxz/vrackconverter' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs:
       - test
       - build
