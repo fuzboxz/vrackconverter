@@ -190,15 +190,12 @@ jobs:
           NOTES_FILE: ${{ runner.temp }}/release-notes.txt
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Get commits since last tag, filter out test/CI changes and Claude commits
           PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
 
           {
             printf "## What's Changed\n\n"
             if [ -n "$PREV_TAG" ]; then
-              git log "$PREV_TAG..HEAD" --pretty=format:"- %s" --no-merges -- \
-                ':!.github' ':!Makefile' ':!**/*_test.go' ':!**/testdata/**' ':!*.md' \
-                | grep -vi 'claude' || printf "- Initial release\n"
+              git log "$PREV_TAG..HEAD" --pretty=format:"- %s" --no-merges | grep -vi 'claude'
             else
               printf "- Initial release\n"
             fi
