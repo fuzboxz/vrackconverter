@@ -5,6 +5,87 @@ import (
 	"fmt"
 )
 
+// ============================================================================
+// Common Utilities
+// ============================================================================
+// These functions are format-agnostic and can be used by all format handlers.
+
+// FromJSON parses JSON bytes into a map[string]any structure.
+// This is a common utility used by all format handlers for JSON parsing.
+func FromJSON(data []byte) (map[string]any, error) {
+	var root map[string]any
+	if err := json.Unmarshal(data, &root); err != nil {
+		return nil, fmt.Errorf("failed to parse JSON: %w", err)
+	}
+	return root, nil
+}
+
+// ToJSON serializes a map[string]any structure to indented JSON bytes.
+// This is a common utility used by all format handlers for JSON serialization.
+func ToJSON(root map[string]any) ([]byte, error) {
+	return json.MarshalIndent(root, "", "  ")
+}
+
+// getInt64FromMap extracts an int64 value from a map using the given key.
+// Handles float64 (JSON number default), int64, and int types.
+// This is a common utility used by all format handlers for JSON number handling.
+func getInt64FromMap(m map[string]any, key string) int64 {
+	if val, ok := m[key]; ok {
+		switch v := val.(type) {
+		case float64:
+			return int64(v)
+		case int64:
+			return v
+		case int:
+			return int64(v)
+		}
+	}
+	return 0
+}
+
+// convertColorToHex converts a color map with r,g,b,a float64 values (0-1 range)
+// to a hexadecimal string format (rrggbbaa).
+// This is a common utility used by all format handlers for color conversion.
+func convertColorToHex(color map[string]any) string {
+	r, rok := color["r"].(float64)
+	g, gok := color["g"].(float64)
+	b, bok := color["b"].(float64)
+	a, aok := color["a"].(float64)
+
+	if !rok || !gok || !bok {
+		return ""
+	}
+
+	if !aok {
+		a = 1.0
+	}
+
+	return fmt.Sprintf("%02x%02x%02x%02x", uint8(r*255), uint8(g*255), uint8(b*255), uint8(a*255))
+}
+
+// findModuleByID searches for a module with the given ID in a modules array.
+// Returns the module map if found, nil otherwise.
+// This is a common utility used by all format handlers for module lookups.
+func findModuleByID(modules []any, id int64) map[string]any {
+	for _, m := range modules {
+		if mod, ok := m.(map[string]any); ok {
+			if modID := getInt64FromMap(mod, "id"); modID == id {
+				return mod
+			}
+		}
+	}
+	return nil
+}
+
+// ============================================================================
+// V0.6 / MiRack Format-Specific Transformation
+// ============================================================================
+// The following functions are specific to v0.6/MiRack → v2 conversion.
+// TODO: Eventually move these to a dedicated v06.go file when implementing
+// format-specific handlers.
+
+// TransformPatch converts a v0.6/MiRack patch to v2 format.
+// This is the main entry point for v0.6 → v2 transformation.
 func TransformPatch(root map[string]any, targetVersion string, issues *[]string, opts Options, inputFilename string) error {
 	root["version"] = targetVersion
 
@@ -220,6 +301,8 @@ func TransformPatch(root map[string]any, targetVersion string, issues *[]string,
 	return nil
 }
 
+// validateConversion performs post-conversion validation to detect potential issues.
+// This is v0.6/MiRack specific but may be adapted for other formats.
 func validateConversion(root map[string]any, issues *[]string) {
 	modules, ok := root["modules"].([]any)
 	if !ok {
@@ -292,22 +375,33 @@ func validateConversion(root map[string]any, issues *[]string) {
 	}
 }
 
-// Plugin and model mappings for miRack compatibility
+// ============================================================================
+// V0.6 / MiRack Plugin and Model Mappings
+// ============================================================================
+
+// pluginMappings maps miRack plugin names to VCV Rack plugin names.
 var pluginMappings = map[string]string{
 	// Add known miRack→VCV plugin renames here
 	// Example: "miRackPlugin": "VCVPlugin",
 }
 
+// modelMappings maps old module model names to new ones within a plugin.
 var modelMappings = map[string]map[string]string{
 	// Format: "plugin": {"oldModel": "newModel"}
 	// Example: "Core": {"AudioInterface": "AudioInterface2"},
 }
 
-// Port ID remappings for modules that changed between miRack and VCV Rack 2.
+// portMappings handles port ID changes between miRack and VCV Rack 2.
 // Format: "plugin/model": {portType: {oldID: newID}}
 // portType is "inputs" or "outputs"
 var portMappings = map[string]map[string]map[int64]int64{}
 
+// ============================================================================
+// V0.6 / MiRack Helper Functions
+// ============================================================================
+
+// applyPluginMappings applies plugin and model renames for miRack compatibility.
+// This is v0.6/MiRack specific.
 func applyPluginMappings(modules []any, issues *[]string) {
 	for _, m := range modules {
 		mod, ok := m.(map[string]any)
@@ -342,6 +436,8 @@ func applyPluginMappings(modules []any, issues *[]string) {
 	}
 }
 
+// convertModuleData converts module-specific data fields from v0.6 to v2 format.
+// This is v0.6/MiRack specific.
 func convertModuleData(mod map[string]any, issues *[]string) {
 	data, ok := mod["data"].(map[string]any)
 	if !ok {
@@ -361,6 +457,8 @@ func convertModuleData(mod map[string]any, issues *[]string) {
 	// Add other module-specific conversions here
 }
 
+// convertAudioData converts miRack-specific audio device configuration to v2 format.
+// This is v0.6/MiRack specific.
 func convertAudioData(audio map[string]any, issues *[]string) {
 	// miRack audio data may have different field names or structure
 	// VCV Rack 2 expects:
@@ -395,31 +493,8 @@ func convertAudioData(audio map[string]any, issues *[]string) {
 	delete(audio, "maxChannels")
 }
 
-func findModuleByID(modules []any, id int64) map[string]any {
-	for _, m := range modules {
-		if mod, ok := m.(map[string]any); ok {
-			if modID := getInt64FromMap(mod, "id"); modID == id {
-				return mod
-			}
-		}
-	}
-	return nil
-}
-
-func getInt64FromMap(m map[string]any, key string) int64 {
-	if val, ok := m[key]; ok {
-		switch v := val.(type) {
-		case float64:
-			return int64(v)
-		case int64:
-			return v
-		case int:
-			return int64(v)
-		}
-	}
-	return 0
-}
-
+// transformParams converts parameter fields from v0.6 (paramId) to v2 (id) format.
+// This is v0.6/MiRack specific.
 func transformParams(mod map[string]any, moduleIndex int, issues *[]string) {
 	params, ok := mod["params"].([]any)
 	if !ok {
@@ -440,33 +515,4 @@ func transformParams(mod map[string]any, moduleIndex int, issues *[]string) {
 			param["id"] = i
 		}
 	}
-}
-
-func convertColorToHex(color map[string]any) string {
-	r, rok := color["r"].(float64)
-	g, gok := color["g"].(float64)
-	b, bok := color["b"].(float64)
-	a, aok := color["a"].(float64)
-
-	if !rok || !gok || !bok {
-		return ""
-	}
-
-	if !aok {
-		a = 1.0
-	}
-
-	return fmt.Sprintf("%02x%02x%02x%02x", uint8(r*255), uint8(g*255), uint8(b*255), uint8(a*255))
-}
-
-func ToJSON(root map[string]any) ([]byte, error) {
-	return json.MarshalIndent(root, "", "  ")
-}
-
-func FromJSON(data []byte) (map[string]any, error) {
-	var root map[string]any
-	if err := json.Unmarshal(data, &root); err != nil {
-		return nil, fmt.Errorf("failed to parse JSON: %w", err)
-	}
-	return root, nil
 }
