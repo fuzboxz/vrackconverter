@@ -54,30 +54,24 @@ jobs:
 
   build:
     name: Build
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     needs: test
     # Only run on canonical repo for releases
     if: github.repository == 'fuzboxz/vrackconverter' && startsWith(github.ref, 'refs/tags/v')
     strategy:
       matrix:
         include:
-          - os: ubuntu-latest
-            goos: linux
+          - goos: linux
             goarch: amd64
-          - os: ubuntu-latest
-            goos: linux
+          - goos: linux
             goarch: arm64
-          - os: macos-latest
-            goos: darwin
+          - goos: darwin
             goarch: amd64
-          - os: macos-latest
-            goos: darwin
+          - goos: darwin
             goarch: arm64
-          - os: windows-latest
-            goos: windows
+          - goos: windows
             goarch: amd64
-          - os: windows-latest
-            goos: windows
+          - goos: windows
             goarch: arm64
     steps:
       - name: Checkout
@@ -91,31 +85,8 @@ jobs:
           go-version: "1.23"
           cache: false
 
-      - name: Cache Go modules
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: go-${{ runner.os }}-${{ github.event_name }}-${{ hashFiles('go.sum') }}
-          restore-keys: |
-            go-${{ runner.os }}-push-
-
       - name: Download dependencies
         run: go mod download
-
-      - name: Verify dependencies
-        run: go mod verify
-
-      - name: Determine version
-        id: version
-        run: |
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-          else
-            echo "version=${GITHUB_REF#refs/heads/}-$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-          fi
-        shell: bash
 
       - name: Build
         shell: bash
@@ -123,34 +94,23 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
+          VERSION: ${{ github.ref_name }}
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
           ARCHIVE_NAME="vrackconverter-${{ matrix.goos }}-${{ matrix.goarch }}"
-          BINARY_EXT=""
+
           if [ "${{ matrix.goos }}" = "windows" ]; then
-            BINARY_EXT=".exe"
-          fi
-
-          # Create directory structure
-          mkdir -p "$ARCHIVE_NAME"
-
-          # Build binary with simple name
-          go build -ldflags "-X main.Version=$VERSION" -o "$ARCHIVE_NAME/vrackconverter$BINARY_EXT" ./cmd/vrackconverter/
-
-          # Create archive
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            # Use PowerShell Compress-Archive for Windows (zip not in PATH)
-            powershell -Command "Compress-Archive -Path '$ARCHIVE_NAME' -DestinationPath '$ARCHIVE_NAME.zip'"
+            BINARY_NAME="vrackconverter.exe"
+            go build -ldflags "-X main.Version=$VERSION" -o "$BINARY_NAME" ./cmd/vrackconverter/
+            zip -q "$ARCHIVE_NAME.zip" "$BINARY_NAME"
             echo "ARCHIVE_NAME=$ARCHIVE_NAME.zip" >> $GITHUB_ENV
           else
-            # Use tar.gz for Unix
-            tar -czf "$ARCHIVE_NAME.tar.gz" "$ARCHIVE_NAME"
+            BINARY_NAME="vrackconverter"
+            go build -ldflags "-X main.Version=$VERSION" -o "$BINARY_NAME" ./cmd/vrackconverter/
+            tar -czf "$ARCHIVE_NAME.tar.gz" "$BINARY_NAME"
             echo "ARCHIVE_NAME=$ARCHIVE_NAME.tar.gz" >> $GITHUB_ENV
           fi
 
       - name: Upload artifacts
-        # Only upload for tags, not for main branch pushes
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v4
         with:
           name: vrackconverter-${{ matrix.goos }}-${{ matrix.goarch }}
@@ -192,20 +152,18 @@ jobs:
         run: |
           PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
 
-          {
-            printf "## What's Changed\n\n"
-            if [ -n "$PREV_TAG" ]; then
-              git log "$PREV_TAG..HEAD" --pretty=format:"- %s" --no-merges | grep -vi 'claude'
-            else
-              printf "- Initial release\n"
-            fi
-          } > "$NOTES_FILE"
+          printf "## What's Changed\n\n" > "$NOTES_FILE"
+          if [ -n "$PREV_TAG" ]; then
+            git log "$PREV_TAG..HEAD" --pretty=format:"- %s" --no-merges | grep -vi 'claude' >> "$NOTES_FILE" || true
+          else
+            printf "- Initial release\n" >> "$NOTES_FILE"
+          fi
 
           cat "$NOTES_FILE"
 
           gh release create '${{ github.ref_name }}' \
             --notes-file "$NOTES_FILE" \
-            artifacts/vrackconverter-*/*/*.tar.gz \
-            artifacts/vrackconverter-*/*/*.zip \
+            artifacts/**/*.tar.gz \
+            artifacts/**/*.zip \
             artifacts/checksums.txt
         shell: bash
