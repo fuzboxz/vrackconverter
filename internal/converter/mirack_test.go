@@ -155,7 +155,7 @@ func TestNormalizeMiRack(t *testing.T) {
 			"version": "0.6.2",
 			"modules": [
 				{"id": 1, "plugin": "Core", "model": "AudioInterface", "params": []},
-				{"id": 2, "plugin": "Fundamental", "model": "VCO", "params": []}
+				{"id": 2, "plugin": "Core", "model": "VCO", "params": []}
 			],
 			"wires": [
 				{"outputModuleId": 1, "outputId": 0, "inputModuleId": 0, "inputId": 0}
@@ -189,7 +189,7 @@ func TestNormalizeMiRack(t *testing.T) {
 			"version": "0.6.2",
 			"modules": [
 				{"id": 1, "plugin": "Core", "model": "AudioInterface", "params": []},
-				{"id": 2, "plugin": "Fundamental", "model": "VCO", "params": []}
+				{"id": 2, "plugin": "Core", "model": "VCO", "params": []}
 			],
 			"wires": [
 				{"outputModuleId": 1, "outputId": 0, "inputModuleId": 0, "inputId": 0}
@@ -338,7 +338,7 @@ func TestNormalizeMiRack(t *testing.T) {
 			"version": "0.6.2",
 			"modules": [
 				{"plugin": "Core", "model": "AudioInterface", "params": []},
-				{"plugin": "Fundamental", "model": "VCO", "params": []}
+				{"plugin": "Core", "model": "VCO", "params": []}
 			],
 			"wires": [
 				{"outputModuleId": 1, "outputId": 0, "inputModuleId": 0, "inputId": 0}
@@ -818,7 +818,7 @@ func TestMiRackRoundtrip(t *testing.T) {
 			},
 			{
 				"id": 2,
-				"plugin": "Fundamental",
+				"plugin": "Core",
 				"model": "VCO",
 				"params": [
 					{"paramId": 0, "value": 0.0},
@@ -900,4 +900,249 @@ func TestMiRackRoundtrip(t *testing.T) {
 	if getInt64FromMap(wire, "inputModuleId") != 0 {
 		t.Errorf("inputModuleId should be 0 (array index), got %v", wire["inputModuleId"])
 	}
+}
+
+// TestMiRackRoundtripPreservesAllCables tests that the roundtrip preserves all cables
+// even when there are module ID changes or references that might not be in the fallback mapping.
+// This is the key test for the bug fix where cables were being skipped.
+func TestMiRackRoundtripPreservesAllCables(t *testing.T) {
+	t.Run("preserves cables through roundtrip", func(t *testing.T) {
+		// Start with a MiRack patch with non-sequential module IDs
+		originalJSON := `{
+			"version": "0.6.2",
+			"modules": [
+				{"id": 100, "plugin": "Core", "model": "VCO", "params": []},
+				{"id": 200, "plugin": "Core", "model": "VCA", "params": []},
+				{"id": 300, "plugin": "Core", "model": "AudioInterface", "params": []}
+			],
+			"wires": [
+				{"outputModuleId": 1, "outputId": 0, "inputModuleId": 0, "inputId": 0},
+				{"outputModuleId": 2, "outputId": 0, "inputModuleId": 1, "inputId": 0}
+			]
+		}`
+
+		var patch map[string]any
+		if err := json.Unmarshal([]byte(originalJSON), &patch); err != nil {
+			t.Fatalf("Failed to parse JSON: %v", err)
+		}
+
+		// Count original wires
+		originalWires := patch["wires"].([]any)
+		originalWireCount := len(originalWires)
+
+		// MiRack → V2 (normalize)
+		var issues []string
+		if err := NormalizeMiRack(patch, &issues); err != nil {
+			t.Fatalf("NormalizeMiRack failed: %v", err)
+		}
+
+		// V2 → MiRack (denormalize)
+		if err := DenormalizeMiRack(patch, &issues); err != nil {
+			t.Fatalf("DenormalizeMiRack failed: %v", err)
+		}
+
+		// Verify all cables are preserved
+		finalWires := patch["wires"].([]any)
+		finalWireCount := len(finalWires)
+
+		if finalWireCount != originalWireCount {
+			t.Errorf("Wire count mismatch: expected %d, got %d", originalWireCount, finalWireCount)
+		}
+
+		// Verify _originalIndexToID was cleaned up
+		if _, hasMapping := patch["_originalIndexToID"]; hasMapping {
+			t.Error("_originalIndexToID should be removed after denormalization")
+		}
+	})
+
+	t.Run("uses stored mapping for correct reversal", func(t *testing.T) {
+		// This test verifies that the stored _originalIndexToID mapping is used
+		// during denormalization to correctly reverse the cable references
+		originalJSON := `{
+			"version": "0.6.2",
+			"modules": [
+				{"id": 42, "plugin": "Core", "model": "VCO", "params": []},
+				{"id": 99, "plugin": "Core", "model": "VCA", "params": []}
+			],
+			"wires": [
+				{"outputModuleId": 1, "outputId": 0, "inputModuleId": 0, "inputId": 0}
+			]
+		}`
+
+		var patch map[string]any
+		if err := json.Unmarshal([]byte(originalJSON), &patch); err != nil {
+			t.Fatalf("Failed to parse JSON: %v", err)
+		}
+
+		// Normalize
+		var issues []string
+		if err := NormalizeMiRack(patch, &issues); err != nil {
+			t.Fatalf("NormalizeMiRack failed: %v", err)
+		}
+
+		// Verify _originalIndexToID was stored
+		mapping, ok := patch["_originalIndexToID"].(map[int]int64)
+		if !ok {
+			t.Fatal("_originalIndexToID mapping should be stored during normalization")
+		}
+
+		// Verify the mapping: index 0 → ID 42, index 1 → ID 99
+		if mapping[0] != 42 {
+			t.Errorf("Index 0 should map to ID 42, got %d", mapping[0])
+		}
+		if mapping[1] != 99 {
+			t.Errorf("Index 1 should map to ID 99, got %d", mapping[1])
+		}
+
+		// Denormalize
+		if err := DenormalizeMiRack(patch, &issues); err != nil {
+			t.Fatalf("DenormalizeMiRack failed: %v", err)
+		}
+
+		// Verify wire references were correctly converted back to array indices
+		wires := patch["wires"].([]any)
+		if len(wires) != 1 {
+			t.Fatalf("Expected 1 wire, got %d", len(wires))
+		}
+
+		wire := wires[0].(map[string]any)
+		// Original: outputModuleId: 1 (array index for VCA, ID 99)
+		// After roundtrip, should still be array index 1
+		if getInt64FromMap(wire, "outputModuleId") != 1 {
+			t.Errorf("outputModuleId should be 1 (array index), got %v", wire["outputModuleId"])
+		}
+		// Original: inputModuleId: 0 (array index for VCO, ID 42)
+		// After roundtrip, should still be array index 0
+		if getInt64FromMap(wire, "inputModuleId") != 0 {
+			t.Errorf("inputModuleId should be 0 (array index), got %v", wire["inputModuleId"])
+		}
+	})
+}
+
+// TestMiRackNoPluginConversion tests that MiRack does NOT convert plugins.
+// MiRack does NOT have a "Fundamental" plugin - all modules use "Core".
+// This is the key difference from VCV Rack v0.6.
+func TestMiRackNoPluginConversion(t *testing.T) {
+	t.Run("normalize: MiRack modules stay Core", func(t *testing.T) {
+		// MiRack format - all modules use Core plugin
+		mirackJSON := `{
+			"version": "0.6.2",
+			"modules": [
+				{"id": 1, "plugin": "Core", "model": "VCA-1", "params": []},
+				{"id": 2, "plugin": "Core", "model": "VCO-1", "params": []},
+				{"id": 3, "plugin": "Core", "model": "AudioInterface", "params": []}
+			],
+			"wires": []
+		}`
+
+		var patch map[string]any
+		if err := json.Unmarshal([]byte(mirackJSON), &patch); err != nil {
+			t.Fatalf("Failed to parse JSON: %v", err)
+		}
+
+		var issues []string
+		if err := NormalizeMiRack(patch, &issues); err != nil {
+			t.Fatalf("NormalizeMiRack failed: %v", err)
+		}
+
+		modules := patch["modules"].([]any)
+
+		// All modules should stay Core (no plugin conversion)
+		for i, m := range modules {
+			mod := m.(map[string]any)
+			plugin, _ := mod["plugin"].(string)
+			if plugin != "Core" {
+				t.Errorf("Module[%d]: expected plugin 'Core', got '%s'", i, plugin)
+			}
+		}
+
+		// No plugin conversion issues should be logged
+		for _, issue := range issues {
+			if strings.Contains(issue, "→ Core/") {
+				t.Errorf("MiRack should not convert plugins, but got issue: %s", issue)
+			}
+		}
+	})
+
+	t.Run("denormalize: V2 Core modules stay Core for MiRack", func(t *testing.T) {
+		// V2 format with Core plugin
+		// CRITICAL: MiRack does NOT have a "Fundamental" plugin - all modules use "Core"
+		v2JSON := `{
+			"version": "2.6.6",
+			"modules": [
+				{"id": 1, "plugin": "Core", "model": "VCA-1", "params": []},
+				{"id": 2, "plugin": "Core", "model": "VCO-1", "params": []},
+				{"id": 3, "plugin": "Core", "model": "AudioInterface", "params": []}
+			],
+			"cables": []
+		}`
+
+		var patch map[string]any
+		if err := json.Unmarshal([]byte(v2JSON), &patch); err != nil {
+			t.Fatalf("Failed to parse JSON: %v", err)
+		}
+
+		// Normalize first to build ID-to-index mapping
+		var issues []string
+		if err := NormalizeV2(patch, &issues); err != nil {
+			t.Fatalf("NormalizeV2 failed: %v", err)
+		}
+
+		// Denormalize to MiRack format
+		issues = nil
+		if err := DenormalizeMiRack(patch, &issues); err != nil {
+			t.Fatalf("DenormalizeMiRack failed: %v", err)
+		}
+
+		modules := patch["modules"].([]any)
+
+		// Verify ALL modules stay Core (MiRack uses Core for everything)
+		for i, m := range modules {
+			mod := m.(map[string]any)
+			plugin, _ := mod["plugin"].(string)
+			if plugin != "Core" {
+				t.Errorf("Module[%d]: expected plugin 'Core' for MiRack, got '%s'", i, plugin)
+			}
+		}
+	})
+
+	t.Run("roundtrip: MiRack → V2 → MiRack preserves Core plugin", func(t *testing.T) {
+		// Start with MiRack format (ALL modules use Core plugin)
+		// Note: MiRack does NOT have a "Fundamental" plugin
+		originalJSON := `{
+			"version": "0.6.2",
+			"modules": [
+				{"id": 1, "plugin": "Core", "model": "VCA-1", "params": []},
+				{"id": 2, "plugin": "Core", "model": "AudioInterface", "params": []}
+			],
+			"wires": []
+		}`
+
+		var patch map[string]any
+		if err := json.Unmarshal([]byte(originalJSON), &patch); err != nil {
+			t.Fatalf("Failed to parse JSON: %v", err)
+		}
+
+		// MiRack → V2 (normalize)
+		var issues []string
+		if err := NormalizeMiRack(patch, &issues); err != nil {
+			t.Fatalf("NormalizeMiRack failed: %v", err)
+		}
+
+		// V2 → MiRack (denormalize)
+		if err := DenormalizeMiRack(patch, &issues); err != nil {
+			t.Fatalf("DenormalizeMiRack failed: %v", err)
+		}
+
+		modules := patch["modules"].([]any)
+
+		// Verify all modules use Core plugin (MiRack format)
+		for i, m := range modules {
+			mod := m.(map[string]any)
+			plugin, _ := mod["plugin"].(string)
+			if plugin != "Core" {
+				t.Errorf("Module[%d]: roundtrip failed, expected plugin 'Core', got '%s'", i, plugin)
+			}
+		}
+	})
 }

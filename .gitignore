@@ -37,3 +37,4 @@ Thumbs.db
 # Claude Code memory (keep settings.json)
 .claude/memory/
 .claude/projects/
+/tmp/

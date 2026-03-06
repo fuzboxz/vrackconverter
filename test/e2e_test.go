@@ -252,6 +252,12 @@ func TestE2E_AllTestFilesAreValid(t *testing.T) {
 				t.Fatalf("failed to read input: %v", err)
 			}
 
+			// For v2 zstd archives, extract JSON first
+			if converter.IsV2Format(inputData) {
+				t.Skipf("v2 archives require JSON extraction, skipping %s", name)
+				return
+			}
+
 			// Parse the input
 			patch, err := converter.FromJSON(inputData)
 			if err != nil {

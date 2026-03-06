@@ -2,7 +2,7 @@
 
 **Location**: `~/vrackconverter/`
 
-A Go-based tool for converting patches from VCV Rack v0.6/MiRack format to VCV Rack v2.x format.
+A Go-based tool for converting patches between VCV Rack v0.6, MiRack, and VCV Rack v2.x formats.
 
 ---
 
@@ -173,10 +173,17 @@ vrackconverter/
 ├── internal/
 │   ├── converter/
 │   │   ├── converter.go     # File/directory conversion orchestration
-│   │   ├── transform.go     # Core patch transformation logic
-│   │   ├── metamodule.go    # MetaModule (HubMedium) module creation
+│   │   ├── format.go        # Format type definitions and detection
 │   │   ├── archive.go       # v0.6 JSON ↔ v2 tar archive handling, v2 format detection
-│   │   └── transform_test.go # Transformation tests
+│   │   ├── transform.go     # Core patch transformation logic (legacy, for old ConvertFile)
+│   │   ├── metamodule.go    # MetaModule (HubMedium) module creation
+│   │   ├── v2.go            # VCV Rack v2 format handler (no-op normalization)
+│   │   ├── vcvv06.go        # VCV Rack v0.6 format handler (Fundamental ↔ Core)
+│   │   ├── mirack.go        # MiRack format handler (NO Fundamental plugin)
+│   │   ├── legacy.go        # Shared v0.6-style conversion logic + PluginMapper strategy
+│   │   ├── v2_test.go       # V2 format tests
+│   │   ├── vcvv06_test.go   # v0.6 format tests (Fundamental plugin mapping)
+│   │   └── mirack_test.go  # MiRack format tests (NoOp plugin mapping)
 │   └── patch/
 │       └── patch.go         # Shared data structures (Patch, Module, Cable)
 └── Makefile
@@ -207,6 +214,70 @@ ToJSON() → JSON bytes
     ↓
 CreateV2Patch() → tar+compress → output.vcv
 ```
+
+### Format-Aware Pipeline Architecture
+
+The converter uses a format-aware pipeline with separate handlers for each format:
+
+```
+input file → FormatHandler.Read() → JSON bytes
+    ↓
+FromJSON() → map[string]any
+    ↓
+[Normalize*()] → converts format to internal (v2) representation
+    ↓
+[Denormalize*()] → converts internal to target format
+    ↓
+ToJSON() → JSON bytes
+    ↓
+FormatHandler.Write() → output file
+```
+
+### Format Handlers
+
+| Format | Handler | File Container | Plugin Semantics |
+|--------|---------|----------------|------------------|
+| **VCV Rack v0.6** | `V06Handler` | Zstd tar archive | Has Fundamental + Core plugins |
+| **MiRack** | `MiRackHandler` | Directory bundle (.mrk) | NO Fundamental plugin (all Core) |
+| **VCV Rack v2** | `V2Handler` (default) | Zstd tar archive | Core only (Fundamental merged in) |
+
+### Key Format Differences
+
+| Feature | v0.6 | MiRack | v2 |
+|---------|------|--------|-----|
+| Fundamental plugin | ✅ Yes | ❌ No | ❌ No (merged into Core) |
+| File container | zstd tar | Directory (.mrk) | zstd tar |
+| Cable/wire name | "wires" | "wires" | "cables" |
+| Cable references | Array indices | Array indices | Module IDs |
+| Parameter ID field | "paramId" | "paramId" | "id" |
+| Bypass field | "disabled" | "disabled" | "bypass" |
+
+### PluginMapper Strategy Pattern
+
+The converter uses a strategy pattern for format-specific plugin mapping:
+
+```go
+// PluginMapper defines how plugins are mapped between formats
+type PluginMapper interface {
+    NormalizePlugin(plugin, model string) (string, bool)   // Source → Internal
+    DenormalizePlugin(plugin, model string) (string, bool) // Internal → Target
+}
+
+// NoOpPluginMapper - MiRack (no conversion needed)
+type NoOpPluginMapper struct{}
+
+// V06PluginMapper - VCV Rack v0.6 (Fundamental ↔ Core)
+type V06PluginMapper struct{}
+```
+
+**Module Mapping Summary:**
+
+| Direction | Format | Plugin Conversion |
+|-----------|--------|-------------------|
+| v0.6 → V2 | NormalizeV06 | Fundamental → Core |
+| V2 → v0.6 | DenormalizeV06 | Core → Fundamental (for known modules) |
+| MiRack → V2 | NormalizeMiRack | None (already all Core) |
+| V2 → MiRack | DenormalizeMiRack | None (stay all Core) |
 
 ### Key Modules
 
@@ -366,6 +437,45 @@ cable["outputModuleId"] = wire["outputModuleId"]  // Still 0, 1, 2, etc.
 // - VCV Rack silently ignores the broken cable
 ```
 
+## Known Issues
+
+### Cable Skipping Bug (FIXED)
+
+**FIXED**: The converter now preserves all cables even when module IDs aren't found in the mapping.
+
+**Previous Behavior**: When converting V2 → MiRack, cables with module IDs not in the mapping were skipped with warnings:
+```
+MiRack denormalization: wire[0]: outputModuleId 1 not found in module list
+```
+
+**Solution**: The fix implements two improvements:
+
+1. **Store `indexToID` mapping during normalization**: When converting v0.6/MiRack → V2, the original index-to-ID mapping is stored in `_originalIndexToID` field. This ensures the same mapping can be reversed during V2 → v0.6/MiRack conversion.
+
+2. **Preserve cables instead of skipping**: When a module ID isn't found during denormalization, the cable is preserved with the original module ID (logged as a warning). The target application may handle missing modules differently.
+
+**Implementation** (`internal/converter/legacy.go`):
+```go
+// During normalization - store the mapping
+patch["_originalIndexToID"] = indexToID
+
+// During denormalization - retrieve and reverse
+if indexToIDRaw, ok := patch["_originalIndexToID"]; ok {
+    // Reverse the mapping: module ID → array index
+    for idx, id := range indexToIDRaw {
+        idToIndex[id] = idx
+    }
+}
+
+// Preserve cable even if module reference not found
+if !outputExists {
+    *issues = append(*issues, fmt.Sprintf("outputModuleId %d not found (preserving with original ID)", outputModuleID))
+    // Keep original module ID - target application may handle missing modules
+} else {
+    wire["outputModuleId"] = outputIndex
+}
+```
+
 ## Port Number Mappings
 
 Some modules have different port numbering between MiRack and VCV Rack 2.
@@ -510,8 +620,11 @@ func IsV2Format(data []byte) bool {
 func extractVersion(data []byte) (string, error) {
     // 1. Try parsing as plain JSON
     // 2. If that fails, try as zstd tar archive
-    // 3. Extract version from patch.json
+    // 3. Extract version from patch.json (handles both "patch.json" and "./patch.json")
 }
+```
+
+**Note**: Some v2 archives (especially those created by certain tools) use `./patch.json` as the tar entry name instead of `patch.json`. The extractor handles both variants.
 ```
 
 ### Result States
