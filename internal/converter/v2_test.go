@@ -6,6 +6,19 @@ import (
 	"testing"
 )
 
+func getInt64(val interface{}) int64 {
+	switch v := val.(type) {
+	case int64:
+		return v
+	case float64:
+		return int64(v)
+	case int:
+		return int64(v)
+	default:
+		return 0
+	}
+}
+
 func TestNormalizeV2_PreservesAllData(t *testing.T) {
 	// V2 patches should have all data preserved - normalization is a no-op for data
 	v2JSON := `{

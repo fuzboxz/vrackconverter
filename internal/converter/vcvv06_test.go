@@ -2,6 +2,7 @@ package converter
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -376,54 +377,105 @@ func TestV06PluginMapping(t *testing.T) {
 	})
 
 	t.Run("normalize: Fundamental → Core", func(t *testing.T) {
-		mapper := V06PluginMapper{}
-
+		// Test plugin mapping through NormalizeV06
 		for model := range fundamentalModules {
-			newPlugin, modified := mapper.NormalizePlugin("Fundamental", model)
-			if !modified {
-				t.Errorf("NormalizePlugin should report modification for Fundamental/%s", model)
+			patchJSON := fmt.Sprintf(`{
+				"version": "0.6.2",
+				"modules": [
+					{"id": 1, "plugin": "Fundamental", "model": "%s", "params": []}
+				],
+				"wires": []
+			}`, model)
+
+			var patch map[string]any
+			if err := json.Unmarshal([]byte(patchJSON), &patch); err != nil {
+				t.Fatalf("Failed to parse JSON: %v", err)
 			}
-			if newPlugin != "Core" {
-				t.Errorf("Expected 'Core', got '%s' for Fundamental/%s", newPlugin, model)
+
+			var issues []string
+			if err := NormalizeV06(patch, &issues); err != nil {
+				t.Fatalf("NormalizeV06 failed: %v", err)
+			}
+
+			modules := patch["modules"].([]any)
+			mod := modules[0].(map[string]any)
+			plugin, _ := mod["plugin"].(string)
+
+			if plugin != "Core" {
+				t.Errorf("Expected 'Core' for Fundamental/%s, got '%s'", model, plugin)
 			}
 		}
 	})
 
 	t.Run("denormalize: Core → Fundamental for known modules", func(t *testing.T) {
-		mapper := V06PluginMapper{}
-
+		// Test plugin mapping through DenormalizeV06
 		for model := range fundamentalModules {
-			newPlugin, modified := mapper.DenormalizePlugin("Core", model)
-			if !modified {
-				t.Errorf("DenormalizePlugin should report modification for Core/%s", model)
+			patchJSON := fmt.Sprintf(`{
+				"version": "2.6.6",
+				"modules": [
+					{"id": 1, "plugin": "Core", "model": "%s", "params": []}
+				],
+				"cables": []
+			}`, model)
+
+			var patch map[string]any
+			if err := json.Unmarshal([]byte(patchJSON), &patch); err != nil {
+				t.Fatalf("Failed to parse JSON: %v", err)
 			}
-			if newPlugin != "Fundamental" {
-				t.Errorf("Expected 'Fundamental', got '%s' for Core/%s", newPlugin, model)
+
+			var issues []string
+			if err := NormalizeV2(patch, &issues); err != nil {
+				t.Fatalf("NormalizeV2 failed: %v", err)
+			}
+
+			issues = nil
+			if err := DenormalizeV06(patch, &issues); err != nil {
+				t.Fatalf("DenormalizeV06 failed: %v", err)
+			}
+
+			modules := patch["modules"].([]any)
+			mod := modules[0].(map[string]any)
+			plugin, _ := mod["plugin"].(string)
+
+			if plugin != "Fundamental" {
+				t.Errorf("Expected 'Fundamental' for Core/%s, got '%s'", model, plugin)
 			}
 		}
 	})
 
 	t.Run("denormalize: Core stays Core for non-Fundamental modules", func(t *testing.T) {
-		mapper := V06PluginMapper{}
-
-		nonFundamentalModels := []string{"AudioInterface", "VCMixer", "Blank"}
+		nonFundamentalModels := []string{"AudioInterface", "Blank"}
 
 		for _, model := range nonFundamentalModels {
-			// VCMixer is actually Fundamental, but AudioInterface is not
-			if model == "VCMixer" {
-				continue
+			patchJSON := fmt.Sprintf(`{
+				"version": "2.6.6",
+				"modules": [
+					{"id": 1, "plugin": "Core", "model": "%s", "params": []}
+				],
+				"cables": []
+			}`, model)
+
+			var patch map[string]any
+			if err := json.Unmarshal([]byte(patchJSON), &patch); err != nil {
+				t.Fatalf("Failed to parse JSON: %v", err)
 			}
 
-			newPlugin, modified := mapper.DenormalizePlugin("Core", model)
-			if modified && fundamentalModules[model] {
-				// This is expected for Fundamental modules
-				continue
+			var issues []string
+			if err := NormalizeV2(patch, &issues); err != nil {
+				t.Fatalf("NormalizeV2 failed: %v", err)
 			}
-			if modified && !fundamentalModules[model] {
-				t.Errorf("DenormalizePlugin should not modify Core/%s", model)
+
+			issues = nil
+			if err := DenormalizeV06(patch, &issues); err != nil {
+				t.Fatalf("DenormalizeV06 failed: %v", err)
 			}
-			if newPlugin != "Core" {
-				t.Errorf("Expected 'Core', got '%s' for Core/%s", newPlugin, model)
+
+			modules := patch["modules"].([]any)
+			mod := modules[0].(map[string]any)
+			plugin, _ := mod["plugin"].(string)
+
+			if plugin != "Core" {
+				t.Errorf("Expected 'Core' for non-Fundamental module %s, got '%s'", model, plugin)
 			}
 		}
 	})

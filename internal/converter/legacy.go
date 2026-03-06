@@ -4,37 +4,6 @@ import (
 	"fmt"
 )
 
-// PluginMapper defines how plugins are mapped between formats.
-// Different formats have different plugin semantics - this interface
-// allows each format to provide its own mapping strategy.
-type PluginMapper interface {
-	// NormalizePlugin converts source plugin to internal (v2) format.
-	// Returns (newPlugin, wasModified).
-	NormalizePlugin(plugin, model string) (string, bool)
-
-	// DenormalizePlugin converts internal (v2) plugin to target format.
-	// Returns (newPlugin, wasModified).
-	DenormalizePlugin(plugin, model string) (string, bool)
-}
-
-// NoOpPluginMapper is used when no plugin conversion is needed.
-// MiRack uses this - all modules use "Core" plugin (no Fundamental).
-type NoOpPluginMapper struct{}
-
-// NormalizePlugin returns the plugin unchanged.
-func (NoOpPluginMapper) NormalizePlugin(plugin, model string) (string, bool) {
-	return plugin, false
-}
-
-// DenormalizePlugin returns the plugin unchanged.
-func (NoOpPluginMapper) DenormalizePlugin(plugin, model string) (string, bool) {
-	return plugin, false
-}
-
-// V06PluginMapper handles Fundamental ↔ Core conversion for VCV Rack v0.6.
-// VCV Rack v2 merged "Fundamental" into "Core", but v0.6 has them separate.
-type V06PluginMapper struct{}
-
 // fundamentalModules contains modules from VCV Rack v0.6 Fundamental plugin.
 // This map is ONLY for v0.6 files - MiRack does NOT have "Fundamental" plugin.
 var fundamentalModules = map[string]bool{
@@ -65,90 +34,109 @@ var fundamentalModules = map[string]bool{
 	"Text":       true,
 }
 
-// NormalizePlugin converts Fundamental → Core for v0.6 → v2 conversion.
-func (V06PluginMapper) NormalizePlugin(plugin, model string) (string, bool) {
-	if plugin == "Fundamental" {
-		return "Core", true
-	}
-	return plugin, false
+// V06StyleConfig contains format-specific overrides for V0.6-style formats.
+// This allows V0.6 and MiRack to share 90% of their conversion logic while
+// handling their differences (plugin mapping, color conversion) via callbacks.
+type V06StyleConfig struct {
+	// FormatName is the name of the format (for logging)
+	FormatName string
+
+	// HasFundamental indicates whether the format has a separate Fundamental plugin.
+	// true = v0.6 (Fundamental → Core conversion needed)
+	// false = MiRack (all modules already use Core)
+	HasFundamental bool
+
+	// ConvertColor is an optional callback for format-specific color conversion.
+	// For MiRack: converts colorIndex to hex (normalize) or hex to colorIndex (denormalize).
+	// For v0.6: nil (no color conversion needed, already hex).
+	// The callback receives the cable/wire map and issues slice for logging.
+	ConvertColor func(cable map[string]any, issues *[]string)
+
+	// NormalizePlugin converts a plugin/model pair during normalization.
+	// Returns (newPlugin, wasModified).
+	NormalizePlugin func(plugin, model string) (string, bool)
+
+	// DenormalizePlugin converts a plugin/model pair during denormalization.
+	// Returns (newPlugin, wasModified).
+	DenormalizePlugin func(plugin, model string) (string, bool)
 }
 
-// DenormalizePlugin converts Core → Fundamental for v2 → v0.6 conversion.
-// Only modules that were originally in Fundamental plugin are converted back.
-func (V06PluginMapper) DenormalizePlugin(plugin, model string) (string, bool) {
-	if plugin == "Core" && fundamentalModules[model] {
-		return "Fundamental", true
-	}
-	return plugin, false
-}
-
-// LegacyConverter provides shared conversion logic for v0.6-style formats.
-// Each format provides its own PluginMapper for format-specific behavior.
-type LegacyConverter struct {
-	pluginMapper PluginMapper
-}
-
-// NewLegacyConverter creates a LegacyConverter with the given PluginMapper.
-func NewLegacyConverter(mapper PluginMapper) *LegacyConverter {
-	return &LegacyConverter{pluginMapper: mapper}
-}
-
-// NormalizeLegacy converts v0.6-style formats (array indices, wires) to v2 format.
-// This is the shared normalization for both v0.6 and MiRack formats.
-// The key difference is plugin mapping, handled by the PluginMapper.
-func (lc *LegacyConverter) NormalizeLegacy(patch map[string]any, issues *[]string, formatName string) error {
-	modules, ok := patch["modules"].([]any)
-	if !ok {
-		*issues = append(*issues, fmt.Sprintf("%s normalization: no modules array found", formatName))
+// NormalizeV06Style converts a V0.6-style format to v2.
+// This is the SHARED baseline for both V0.6 and MiRack formats.
+//
+// The function handles all common transformations:
+// - Build index-to-ID mapping for cable conversion
+// - Assign module IDs (preserving existing, assigning sequential for missing)
+// - Convert paramId→id, disabled→bypass
+// - Convert wires→cables with array indices→module IDs
+// - Store mappings for roundtrip conversion
+//
+// Format-specific behavior is provided via config:
+// - HasFundamental: controls Fundamental→Core plugin conversion
+// - ConvertColor: optional callback for MiRack colorIndex conversion
+func NormalizeV06Style(patch map[string]any, config V06StyleConfig, issues *[]string) error {
+	modules := getModules(patch)
+	if modules == nil {
+		*issues = append(*issues, fmt.Sprintf("%s normalization: no modules array found", config.FormatName))
 		return nil
 	}
 
 	// Build index-to-ID mapping for cable reference conversion.
 	// In v0.6/MiRack, wires use array indices, not module IDs.
 	indexToID := make(map[int]int64)
+	nextID := int64(0)
 
 	for i, m := range modules {
 		mod, ok := m.(map[string]any)
 		if !ok {
-			*issues = append(*issues, fmt.Sprintf("%s normalization: module[%d]: invalid module object", formatName, i))
+			*issues = append(*issues, fmt.Sprintf("%s normalization: module[%d]: invalid module object", config.FormatName, i))
 			continue
 		}
 
-		// Apply plugin mapping using the format-specific mapper
+		// Apply plugin mapping using the format-specific callback
 		if plugin, ok := mod["plugin"].(string); ok {
 			if model, hasModel := mod["model"].(string); hasModel {
-				if newPlugin, modified := lc.pluginMapper.NormalizePlugin(plugin, model); modified {
-					oldPlugin := plugin
-					mod["plugin"] = newPlugin
-					*issues = append(*issues, fmt.Sprintf("%s normalization: module[%d]: %s/%s → %s/%s", formatName, i, oldPlugin, model, newPlugin, model))
+				if config.NormalizePlugin != nil {
+					if newPlugin, modified := config.NormalizePlugin(plugin, model); modified {
+						oldPlugin := plugin
+						mod["plugin"] = newPlugin
+						*issues = append(*issues, fmt.Sprintf("%s normalization: module[%d]: %s/%s → %s/%s", config.FormatName, i, oldPlugin, model, newPlugin, model))
+					}
 				}
 			}
 		}
 
-		// Store index-to-ID mapping.
-		// Check if "id" key exists (not just if value >= 0, since 0 is a valid ID).
+		// Assign valid module ID for VCV Rack 2.
+		// V2 requires positive IDs - reassign negative IDs to sequential positives.
+		var moduleID int64
 		if _, hasID := mod["id"]; hasID {
-			if id := getInt64FromMap(mod, "id"); id >= 0 {
-				indexToID[i] = id
+			moduleID = getInt64FromMap(mod, "id")
+			if moduleID < 0 {
+				// Reassign negative ID to positive sequential ID
+				oldID := moduleID
+				moduleID = nextID
+				nextID++
+				mod["id"] = moduleID
+				*issues = append(*issues, fmt.Sprintf("%s normalization: module[%d]: reassigned negative ID %d to %d", config.FormatName, i, oldID, moduleID))
 			} else {
-				// ID exists but is negative, use array index as fallback
-				indexToID[i] = int64(i)
+				// Keep positive ID and track next available
+				if moduleID >= nextID {
+					nextID = moduleID + 1
+				}
 			}
 		} else {
-			// Module has no ID field, use array index
-			indexToID[i] = int64(i)
+			// Module has no ID field, assign sequential ID
+			moduleID = nextID
+			nextID++
+			mod["id"] = moduleID
 		}
+		indexToID[i] = moduleID
 
 		// Convert paramId to id in parameters
-		transformParams(mod, i, issues)
+		convertParamIDToID(mod, i, issues)
 
 		// Convert disabled to bypass (v2 format)
-		if disabled, ok := mod["disabled"]; ok {
-			if disabledBool, ok := disabled.(bool); ok {
-				mod["bypass"] = disabledBool
-			}
-			delete(mod, "disabled")
-		}
+		convertDisabledToBypass(mod, issues)
 
 		// Remove format-specific fields not used in v2
 		delete(mod, "sumPolyInputs")
@@ -157,8 +145,42 @@ func (lc *LegacyConverter) NormalizeLegacy(patch map[string]any, issues *[]strin
 	// Store the index-to-ID mapping for later use during denormalization.
 	// This ensures that when we convert back to v0.6/MiRack format, we can
 	// correctly reverse the module ID → array index conversion.
-	// Using underscore prefix to indicate this is an internal field.
 	patch["_originalIndexToID"] = indexToID
+
+	// Store expander links (leftModuleId/rightModuleId) for V2 roundtrip.
+	// v0.6/MiRack don't support expander links, so we save them to restore later.
+	expanderLinks := make(map[int64]map[string]int64)
+	for _, m := range modules {
+		mod, ok := m.(map[string]any)
+		if !ok {
+			continue
+		}
+		if id := getInt64FromMap(mod, "id"); id >= 0 {
+			links := make(map[string]int64)
+			if leftID, ok := mod["leftModuleId"]; ok && leftID != nil {
+				switch v := leftID.(type) {
+				case float64:
+					links["leftModuleId"] = int64(v)
+				case int64:
+					links["leftModuleId"] = v
+				}
+			}
+			if rightID, ok := mod["rightModuleId"]; ok && rightID != nil {
+				switch v := rightID.(type) {
+				case float64:
+					links["rightModuleId"] = int64(v)
+				case int64:
+					links["rightModuleId"] = v
+				}
+			}
+			if len(links) > 0 {
+				expanderLinks[id] = links
+			}
+		}
+	}
+	if len(expanderLinks) > 0 {
+		patch["_expanderLinks"] = expanderLinks
+	}
 
 	// Convert wires to cables
 	if wires, hasWires := patch["wires"]; hasWires {
@@ -171,7 +193,7 @@ func (lc *LegacyConverter) NormalizeLegacy(patch map[string]any, issues *[]strin
 			for i, c := range cables {
 				cable, ok := c.(map[string]any)
 				if !ok {
-					*issues = append(*issues, fmt.Sprintf("%s normalization: cable[%d]: invalid cable object", formatName, i))
+					*issues = append(*issues, fmt.Sprintf("%s normalization: cable[%d]: invalid cable object", config.FormatName, i))
 					continue
 				}
 
@@ -184,11 +206,11 @@ func (lc *LegacyConverter) NormalizeLegacy(patch map[string]any, issues *[]strin
 				inputModuleID, inputExists := indexToID[int(inputModuleIdx)]
 
 				if !outputExists {
-					*issues = append(*issues, fmt.Sprintf("%s normalization: cable[%d]: outputModuleId index %d out of range", formatName, i, outputModuleIdx))
+					*issues = append(*issues, fmt.Sprintf("%s normalization: cable[%d]: outputModuleId index %d out of range", config.FormatName, i, outputModuleIdx))
 					continue
 				}
 				if !inputExists {
-					*issues = append(*issues, fmt.Sprintf("%s normalization: cable[%d]: inputModuleId index %d out of range", formatName, i, inputModuleIdx))
+					*issues = append(*issues, fmt.Sprintf("%s normalization: cable[%d]: inputModuleId index %d out of range", config.FormatName, i, inputModuleIdx))
 					continue
 				}
 
@@ -196,20 +218,9 @@ func (lc *LegacyConverter) NormalizeLegacy(patch map[string]any, issues *[]strin
 				cable["outputModuleId"] = outputModuleID
 				cable["inputModuleId"] = inputModuleID
 
-				// Convert color format if present (r,g,b,a object to hex string)
-				if color, ok := cable["color"]; ok {
-					switch v := color.(type) {
-					case map[string]any:
-						hexColor := convertColorToHex(v)
-						if hexColor != "" {
-							cable["color"] = hexColor
-						} else {
-							delete(cable, "color")
-						}
-					case float64:
-						// colorIndex value - remove (format-specific)
-						delete(cable, "color")
-					}
+				// Apply format-specific color conversion if provided
+				if config.ConvertColor != nil {
+					config.ConvertColor(cable, issues)
 				}
 
 				validCables = append(validCables, cable)
@@ -219,20 +230,27 @@ func (lc *LegacyConverter) NormalizeLegacy(patch map[string]any, issues *[]strin
 	}
 
 	// Ensure version is set
-	if version, ok := patch["version"].(string); !ok || version == "" {
-		patch["version"] = "2.6.6"
-		*issues = append(*issues, fmt.Sprintf("%s normalization: set default version to 2.6.6", formatName))
-	}
+	patch["version"] = "2.6.6"
 
 	return nil
 }
 
-// DenormalizeLegacy converts v2 format to v0.6-style formats.
+// DenormalizeV06Style converts v2 format to V0.6-style format.
 // This is the shared denormalization for both v0.6 and MiRack formats.
-func (lc *LegacyConverter) DenormalizeLegacy(patch map[string]any, issues *[]string, formatName string) error {
-	modules, ok := patch["modules"].([]any)
-	if !ok {
-		*issues = append(*issues, fmt.Sprintf("%s denormalization: no modules array found", formatName))
+//
+// The function handles all common transformations:
+// - Build ID-to-index mapping for cable conversion
+// - Convert bypass→disabled, id→paramId
+// - Convert cables→wires with module IDs→array indices
+// - Remove v2-specific fields
+//
+// Format-specific behavior is provided via config:
+// - HasFundamental: controls Core→Fundamental plugin conversion
+// - ConvertColor: optional callback for hex→MiRack colorIndex conversion
+func DenormalizeV06Style(patch map[string]any, config V06StyleConfig, issues *[]string) error {
+	modules := getModules(patch)
+	if modules == nil {
+		*issues = append(*issues, fmt.Sprintf("%s denormalization: no modules array found", config.FormatName))
 		return nil
 	}
 
@@ -246,7 +264,6 @@ func (lc *LegacyConverter) DenormalizeLegacy(patch map[string]any, issues *[]str
 	// First try to get the original index-to-ID mapping from v0.6/MiRack normalization
 	if indexToIDRaw, ok := patch["_originalIndexToID"]; ok {
 		// Reverse the mapping: module ID → array index
-		// The stored map has string keys from JSON serialization
 		switch v := indexToIDRaw.(type) {
 		case map[int]int64:
 			idToIndex = make(map[int64]int, len(v))
@@ -256,7 +273,6 @@ func (lc *LegacyConverter) DenormalizeLegacy(patch map[string]any, issues *[]str
 		case map[string]int64:
 			idToIndex = make(map[int64]int, len(v))
 			for idxStr, id := range v {
-				// Parse string key back to int
 				idx := 0
 				if _, err := fmt.Sscanf(idxStr, "%d", &idx); err == nil {
 					idToIndex[id] = idx
@@ -289,43 +305,36 @@ func (lc *LegacyConverter) DenormalizeLegacy(patch map[string]any, issues *[]str
 			continue
 		}
 
-		// Apply plugin mapping using the format-specific mapper
+		// Apply plugin mapping using the format-specific callback
 		if plugin, ok := mod["plugin"].(string); ok {
 			if model, hasModel := mod["model"].(string); hasModel {
-				if newPlugin, modified := lc.pluginMapper.DenormalizePlugin(plugin, model); modified {
-					oldPlugin := plugin
-					mod["plugin"] = newPlugin
-					*issues = append(*issues, fmt.Sprintf("%s denormalization: module[%d]: %s/%s → %s/%s", formatName, i, oldPlugin, model, newPlugin, model))
+				if config.DenormalizePlugin != nil {
+					newPlugin := plugin
+					modified := false
+
+					// Special handling for MiRack: Fundamental → Core
+					// MiRack doesn't have a Fundamental plugin, so all Fundamental modules must be Core
+					if !config.HasFundamental && plugin == "Fundamental" {
+						newPlugin = "Core"
+						modified = true
+					} else {
+						newPlugin, modified = config.DenormalizePlugin(plugin, model)
+					}
+
+					if modified {
+						oldPlugin := plugin
+						mod["plugin"] = newPlugin
+						*issues = append(*issues, fmt.Sprintf("%s denormalization: module[%d]: %s/%s → %s/%s", config.FormatName, i, oldPlugin, model, newPlugin, model))
+					}
 				}
 			}
 		}
 
 		// Convert bypass to disabled
-		if bypass, ok := mod["bypass"]; ok {
-			if bypassBool, ok := bypass.(bool); ok {
-				mod["disabled"] = bypassBool
-				if bypassBool {
-					*issues = append(*issues, fmt.Sprintf("%s denormalization: module[%d]: converted bypass=true to disabled", formatName, i))
-				}
-			}
-			delete(mod, "bypass")
-		}
+		convertBypassToDisabled(mod, issues)
 
 		// Convert id to paramId in parameters
-		if params, ok := mod["params"].([]any); ok {
-			for j, p := range params {
-				param, ok := p.(map[string]any)
-				if !ok {
-					continue
-				}
-				if paramID, hasID := param["id"]; hasID {
-					param["paramId"] = paramID
-					delete(param, "id")
-				} else if _, hasParamID := param["paramId"]; !hasParamID {
-					param["paramId"] = j
-				}
-			}
-		}
+		convertIDToParamID(mod)
 
 		// Remove v2-specific fields not supported by v0.6/MiRack
 		delete(mod, "version")       // Module version not supported
@@ -359,14 +368,14 @@ func (lc *LegacyConverter) DenormalizeLegacy(patch map[string]any, issues *[]str
 				// This can happen when converting v2 patches with module IDs that
 				// weren't present in the original v0.6/MiRack patch.
 				if !outputExists {
-					*issues = append(*issues, fmt.Sprintf("%s denormalization: wire[%d]: outputModuleId %d not found in mapping (preserving with original ID)", formatName, i, outputModuleID))
+					*issues = append(*issues, fmt.Sprintf("%s denormalization: wire[%d]: outputModuleId %d not found in mapping (preserving with original ID)", config.FormatName, i, outputModuleID))
 					// Keep original module ID - target application may handle missing modules
 				} else {
 					wire["outputModuleId"] = outputIndex
 				}
 
 				if !inputExists {
-					*issues = append(*issues, fmt.Sprintf("%s denormalization: wire[%d]: inputModuleId %d not found in mapping (preserving with original ID)", formatName, i, inputModuleID))
+					*issues = append(*issues, fmt.Sprintf("%s denormalization: wire[%d]: inputModuleId %d not found in mapping (preserving with original ID)", config.FormatName, i, inputModuleID))
 					// Keep original module ID - target application may handle missing modules
 				} else {
 					wire["inputModuleId"] = inputIndex
@@ -375,9 +384,10 @@ func (lc *LegacyConverter) DenormalizeLegacy(patch map[string]any, issues *[]str
 				// Remove cable ID (v0.6/MiRack doesn't use cable IDs)
 				delete(wire, "id")
 
-				// Remove cable color (v0.6/MiRack uses colorIndex, not hex colors)
-				// We can't reliably convert hex back to colorIndex, so just remove
-				delete(wire, "color")
+				// Apply format-specific color conversion if provided
+				if config.ConvertColor != nil {
+					config.ConvertColor(wire, issues)
+				}
 
 				validWires = append(validWires, wire)
 			}

@@ -6,8 +6,66 @@ import (
 	"path/filepath"
 )
 
+// ============================================================================
+// MiRack Color Palette
+// ============================================================================
+
+// miRackColorPalette defines the 6 colors available in MiRack by colorIndex.
+// Order: yellow (0), red (1), green (2), teal (3), orange (4), purple (5)
+// Values are RGB bytes (0-255).
+var miRackColorPalette = []struct {
+	name    string
+	r, g, b uint8
+}{
+	{"yellow", 255, 181, 0},  // colorIndex 0: #ffb500
+	{"red", 242, 56, 74},     // colorIndex 1: #f2384a
+	{"green", 0, 181, 110},   // colorIndex 2: #00b56e
+	{"teal", 54, 149, 239},   // colorIndex 3: #3695ef
+	{"orange", 255, 181, 56}, // colorIndex 4: #ffb538
+	{"purple", 140, 74, 181}, // colorIndex 5: #8c4ab5
+}
+
+// miRackColorIndexToHex converts a MiRack colorIndex to hex string "#rrggbb".
+func miRackColorIndexToHex(index int) string {
+	if index < 0 || index >= len(miRackColorPalette) {
+		return "#ffffff" // Default to white for invalid index
+	}
+	c := miRackColorPalette[index]
+	return rgbToHex(c.r, c.g, c.b)
+}
+
+// rgbToMiRackColorIndex finds the nearest MiRack colorIndex for given RGB bytes.
+// Uses Euclidean distance in RGB space to find the closest match.
+func rgbToMiRackColorIndex(r, g, b uint8) int {
+	bestIndex := 0
+	bestDistance := float64(255 * 255 * 3) // Max possible distance
+
+	for i, c := range miRackColorPalette {
+		// Calculate Euclidean distance in RGB space
+		dr := int(r) - int(c.r)
+		dg := int(g) - int(c.g)
+		db := int(b) - int(c.b)
+		distance := float64(dr*dr + dg*dg + db*db)
+
+		if distance < bestDistance {
+			bestDistance = distance
+			bestIndex = i
+		}
+	}
+
+	return bestIndex
+}
+
+// ============================================================================
+// MiRack Format Handler
+// ============================================================================
+
 // MiRackHandler implements FormatHandler for MiRack .mrk bundles.
 // MiRack bundles are directories containing patch.vcv (plain JSON, not compressed).
+//
+// IMPORTANT: MiRack does NOT have a "Fundamental" plugin. All basic modules in MiRack
+// use "plugin": "Core" (AudioInterface, VCO-1, VCA-1, etc.). This is a key difference
+// from VCV Rack v0.6, which has separate "Fundamental" and "Core" plugins.
 type MiRackHandler struct{}
 
 // Read reads a MiRack patch from path.
@@ -57,243 +115,91 @@ func (h *MiRackHandler) Extension() string {
 }
 
 // NormalizeMiRack converts a MiRack patch to the internal format.
-// This preserves all MiRack-specific data for potential round-trip conversion.
-// The internal format is based on VCV Rack v2 (the superset format).
+//
+// MiRack-specific behavior:
+// - NO plugin conversion (all modules already use Core plugin)
+// - Array indices → Module IDs for cables
+// - wires → cables
+// - paramId → id in parameters
+// - disabled → bypass
+// - colorIndex → hex (for cables)
 func NormalizeMiRack(patch map[string]any, issues *[]string) error {
-	modules, ok := patch["modules"].([]any)
-	if !ok {
-		*issues = append(*issues, "MiRack normalization: no modules array found")
-		return nil
+	config := V06StyleConfig{
+		FormatName:     "MiRack",
+		HasFundamental: false, // MiRack does NOT have Fundamental plugin
+		ConvertColor:   convertMiRackColorIndexToHex,
+		NormalizePlugin: func(plugin, model string) (string, bool) {
+			return plugin, false // No conversion needed
+		},
+		DenormalizePlugin: func(plugin, model string) (string, bool) {
+			return plugin, false // No conversion needed
+		},
 	}
+	return NormalizeV06Style(patch, config, issues)
+}
 
-	// Build index-to-ID mapping for cable reference conversion
-	// In MiRack, wires use array indices, not module IDs
-	indexToID := make(map[int]int64)
-
-	for i, m := range modules {
-		mod, ok := m.(map[string]any)
-		if !ok {
-			*issues = append(*issues, fmt.Sprintf("MiRack normalization: module[%d]: invalid module object", i))
-			continue
+// convertMiRackColorIndexToHex converts MiRack colorIndex to hex during normalization.
+func convertMiRackColorIndexToHex(cable map[string]any, issues *[]string) {
+	// Handle colorIndex field (MiRack-specific)
+	if colorIndex, ok := cable["colorIndex"]; ok {
+		var idx int
+		switch v := colorIndex.(type) {
+		case float64:
+			idx = int(v)
+		case int:
+			idx = v
 		}
-
-		// Store index-to-ID mapping
-		// Check if "id" key exists (not just if value >= 0, since 0 is a valid ID)
-		if _, hasID := mod["id"]; hasID {
-			if id := getInt64FromMap(mod, "id"); id >= 0 {
-				indexToID[i] = id
-			} else {
-				// ID exists but is negative, use array index as fallback
-				indexToID[i] = int64(i)
-			}
-		} else {
-			// Module has no ID field, use array index
-			indexToID[i] = int64(i)
-		}
-
-		// Convert paramId to id in parameters
-		transformParams(mod, i, issues)
-
-		// Convert disabled to bypass (v2 format)
-		if disabled, ok := mod["disabled"]; ok {
-			if disabledBool, ok := disabled.(bool); ok {
-				mod["bypass"] = disabledBool
-			}
-			delete(mod, "disabled")
-		}
-
-		// Remove MiRack-specific fields not used in v2
-		delete(mod, "sumPolyInputs")
+		// Convert colorIndex to hex
+		hexColor := miRackColorIndexToHex(idx)
+		cable["color"] = hexColor
+		delete(cable, "colorIndex")
+		// Don't log - this is too verbose
 	}
-
-	// Convert wires to cables
-	if wires, hasWires := patch["wires"]; hasWires {
-		patch["cables"] = wires
-		delete(patch, "wires")
-
-		// Convert cable references from array indices to module IDs
-		if cables, ok := patch["cables"].([]any); ok {
-			validCables := make([]any, 0, len(cables))
-			for i, c := range cables {
-				cable, ok := c.(map[string]any)
-				if !ok {
-					*issues = append(*issues, fmt.Sprintf("MiRack normalization: cable[%d]: invalid cable object", i))
-					continue
-				}
-
-				// Get cable references (these are array indices in MiRack)
-				outputModuleIdx := getInt64FromMap(cable, "outputModuleId")
-				inputModuleIdx := getInt64FromMap(cable, "inputModuleId")
-
-				// Convert array indices to module IDs
-				outputModuleID, outputExists := indexToID[int(outputModuleIdx)]
-				inputModuleID, inputExists := indexToID[int(inputModuleIdx)]
-
-				if !outputExists {
-					*issues = append(*issues, fmt.Sprintf("MiRack normalization: cable[%d]: outputModuleId index %d out of range", i, outputModuleIdx))
-					continue
-				}
-				if !inputExists {
-					*issues = append(*issues, fmt.Sprintf("MiRack normalization: cable[%d]: inputModuleId index %d out of range", i, inputModuleIdx))
-					continue
-				}
-
-				// Update cable with resolved module IDs
-				cable["outputModuleId"] = outputModuleID
-				cable["inputModuleId"] = inputModuleID
-
-				// Convert color format if present (r,g,b,a object to hex string)
-				if color, ok := cable["color"]; ok {
-					switch v := color.(type) {
-					case map[string]any:
-						hexColor := convertColorToHex(v)
-						if hexColor != "" {
-							cable["color"] = hexColor
-						} else {
-							delete(cable, "color")
-						}
-					case float64:
-						// colorIndex value - remove (MiRack-specific)
-						delete(cable, "color")
-					}
-				}
-
-				validCables = append(validCables, cable)
-			}
-			patch["cables"] = validCables
+	// Also handle "color" field if it contains an integer
+	if color, ok := cable["color"]; ok {
+		switch v := color.(type) {
+		case float64:
+			cable["color"] = miRackColorIndexToHex(int(v))
+		case int:
+			cable["color"] = miRackColorIndexToHex(v)
 		}
 	}
-
-	// Ensure version is set
-	if version, ok := patch["version"].(string); !ok || version == "" {
-		patch["version"] = "2.6.6"
-		*issues = append(*issues, "MiRack normalization: set default version to 2.6.6")
-	}
-
-	return nil
 }
 
 // DenormalizeMiRack converts the internal format to MiRack format.
-// This is the KEY function for v2 → MiRack conversion.
-// It converts cables→wires, module IDs→array indices, bypass→disabled, id→paramId.
+//
+// MiRack-specific behavior:
+// - NO plugin conversion (all modules stay Core, NOT Fundamental!)
+// - Module IDs → Array indices for cables
+// - cables → wires
+// - bypass → disabled
+// - id → paramId in parameters
+// - hex → colorIndex (for cables)
 func DenormalizeMiRack(patch map[string]any, issues *[]string) error {
-	modules, ok := patch["modules"].([]any)
-	if !ok {
-		*issues = append(*issues, "MiRack denormalization: no modules array found")
-		return nil
+	config := V06StyleConfig{
+		FormatName:     "MiRack",
+		HasFundamental: false,
+		ConvertColor:   convertHexToMiRackColorIndex,
+		NormalizePlugin: func(plugin, model string) (string, bool) {
+			return plugin, false
+		},
+		DenormalizePlugin: func(plugin, model string) (string, bool) {
+			return plugin, false
+		},
 	}
+	return DenormalizeV06Style(patch, config, issues)
+}
 
-	// Build ID-to-index mapping from the normalized patch
-	// This was stored by NormalizeV2 in the _idToIndex field
-	idToIndex := GetIDToIndexMapping(patch)
-	if idToIndex == nil {
-		// Build mapping on-the-fly if not available
-		idToIndex = make(map[int64]int)
-		for i, m := range modules {
-			if mod, ok := m.(map[string]any); ok {
-				if id := getInt64FromMap(mod, "id"); id >= 0 {
-					idToIndex[id] = i
-				}
-			}
+// convertHexToMiRackColorIndex converts hex to MiRack colorIndex during denormalization.
+func convertHexToMiRackColorIndex(wire map[string]any, issues *[]string) {
+	if color, ok := wire["color"].(string); ok {
+		// Parse hex to RGB, then find nearest MiRack colorIndex
+		r, g, b, ok := hexToRGB(color)
+		if ok {
+			wire["colorIndex"] = rgbToMiRackColorIndex(r, g, b)
 		}
+		delete(wire, "color")
 	}
-
-	// Convert modules
-	for i, m := range modules {
-		mod, ok := m.(map[string]any)
-		if !ok {
-			continue
-		}
-
-		// Convert bypass to disabled
-		if bypass, ok := mod["bypass"]; ok {
-			if bypassBool, ok := bypass.(bool); ok {
-				mod["disabled"] = bypassBool
-				if bypassBool {
-					*issues = append(*issues, fmt.Sprintf("MiRack denormalization: module[%d]: converted bypass=true to disabled", i))
-				}
-			}
-			delete(mod, "bypass")
-		}
-
-		// Convert id to paramId in parameters
-		if params, ok := mod["params"].([]any); ok {
-			for j, p := range params {
-				param, ok := p.(map[string]any)
-				if !ok {
-					continue
-				}
-				if paramID, hasID := param["id"]; hasID {
-					param["paramId"] = paramID
-					delete(param, "id")
-				} else if _, hasParamID := param["paramId"]; !hasParamID {
-					param["paramId"] = j
-				}
-			}
-		}
-
-		// Remove v2-specific fields not supported by MiRack
-		delete(mod, "version")       // Module version not supported
-		delete(mod, "leftModuleId")  // Expander links not supported
-		delete(mod, "rightModuleId") // Expander links not supported
-	}
-
-	// Convert cables to wires
-	if cables, hasCables := patch["cables"]; hasCables {
-		patch["wires"] = cables
-		delete(patch, "cables")
-
-		// Convert cable references from module IDs to array indices
-		if wires, ok := patch["wires"].([]any); ok {
-			validWires := make([]any, 0, len(wires))
-			for i, w := range wires {
-				wire, ok := w.(map[string]any)
-				if !ok {
-					continue
-				}
-
-				// Get module IDs
-				outputModuleID := getInt64FromMap(wire, "outputModuleId")
-				inputModuleID := getInt64FromMap(wire, "inputModuleId")
-
-				// Convert module IDs to array indices
-				outputIndex, outputExists := idToIndex[outputModuleID]
-				inputIndex, inputExists := idToIndex[inputModuleID]
-
-				if !outputExists {
-					*issues = append(*issues, fmt.Sprintf("MiRack denormalization: wire[%d]: outputModuleId %d not found in module list", i, outputModuleID))
-					continue
-				}
-				if !inputExists {
-					*issues = append(*issues, fmt.Sprintf("MiRack denormalization: wire[%d]: inputModuleId %d not found in module list", i, inputModuleID))
-					continue
-				}
-
-				// Update wire with array indices
-				wire["outputModuleId"] = outputIndex
-				wire["inputModuleId"] = inputIndex
-
-				// Remove cable ID (MiRack doesn't use cable IDs)
-				delete(wire, "id")
-
-				// Remove cable color (MiRack uses colorIndex, not hex colors)
-				// We can't reliably convert hex back to colorIndex, so just remove
-				delete(wire, "color")
-
-				validWires = append(validWires, wire)
-			}
-			patch["wires"] = validWires
-		}
-	}
-
-	// Remove v2-specific fields not supported by MiRack
-	delete(patch, "masterModuleId") // Master module not supported
-	delete(patch, "_idToIndex")     // Internal field, don't serialize
-
-	// Set version to MiRack format (0.6.13 - the last v0.6 release)
-	patch["version"] = "0.6.13"
-
-	return nil
 }
 
 // CreateMrkBundle creates a .mrk directory bundle with patch.vcv inside.

@@ -19,30 +19,32 @@ A Go-based tool for converting patches between VCV Rack v0.6, MiRack, and VCV Ra
 **Claude Code hooks** (`.claude/settings.json`):
 - Runs `make fmt && make vet` before responding when code changes are discussed
 
+### Testing Conventions
+
+- **Use project temp folder**: When testing patch conversions, use `test/temp/` instead of `/tmp/`
+  ```bash
+  mkdir -p test/temp
+  ./vrackconverter input.vcv -o test/temp/output.vcv
+  ```
+
 **Git hooks** (`.git/hooks/pre-commit`):
 - Runs `make test` before every commit
 - Commit fails if tests don't pass
 
 ### Make Targets
 
+For full Makefile documentation, see [Makefile.md](../Makefile.md).
+
+Quick reference:
 ```bash
-# Build and test (default)
-make
-
-# Individual targets
-make build          # Build for current platform
-make build-all      # Build for all platforms
-make test           # Run tests with race detector
-make fmt            # Format code
-make vet            # Run go vet
-make clean          # Remove build artifacts
-make install        # Install to $GOPATH/bin or /usr/local/bin
-```
-
-### Build with Version
-
-```bash
-VERSION=1.0.0 make build
+make              # Format, vet, test, and build (default)
+make build        # Build for current platform
+make build-all    # Build for all platforms
+make test         # Run tests
+make fmt          # Format code
+make vet          # Run go vet
+make clean        # Remove build artifacts
+make install      # Install to $GOPATH/bin or /usr/local/bin
 ```
 
 ### Commit Message Convention
@@ -120,12 +122,12 @@ if err != nil {
 - Explain WHY, not WHAT (code shows what)
 
 ```go
-// ConvertFile reads a v0.6 patch and writes it in v2 format.
-// Returns a Result with Success=true on success, or Error on failure.
+// ConvertFile converts a patch using the format-aware pipeline.
+// Detects input/output formats, applies transformations, writes output.
 func ConvertFile(inputPath, outputPath string, opts Options) Result { ... }
 
 // Build index-to-ID mapping for cable reference conversion.
-// MiRack uses array indices in cables, but VCV Rack 2 uses module IDs.
+// MiRack/v0.6 use array indices in cables, VCV Rack 2 uses module IDs.
 for i, m := range modules {
     indexToID[i] = getModuleID(m)
 }
@@ -138,7 +140,7 @@ for i, m := range modules {
 - Use `t.Run()` for subtests with different cases
 
 ```go
-func TestTransformPatch_WithIDs(t *testing.T) {
+func TestNormalizeV06_WithIDs(t *testing.T) {
     t.Run("preserves existing module IDs", func(t *testing.T) { ... })
     t.Run("assigns sequential IDs when missing", func(t *testing.T) { ... })
 }
@@ -171,62 +173,40 @@ vrackconverter/
 │       ├── main.go          # CLI entry point
 │       └── main_test.go     # CLI integration tests
 ├── internal/
-│   ├── converter/
-│   │   ├── converter.go     # File/directory conversion orchestration
-│   │   ├── format.go        # Format type definitions and detection
-│   │   ├── archive.go       # v0.6 JSON ↔ v2 tar archive handling, v2 format detection
-│   │   ├── transform.go     # Core patch transformation logic (legacy, for old ConvertFile)
-│   │   ├── metamodule.go    # MetaModule (HubMedium) module creation
-│   │   ├── v2.go            # VCV Rack v2 format handler (no-op normalization)
-│   │   ├── vcvv06.go        # VCV Rack v0.6 format handler (Fundamental ↔ Core)
-│   │   ├── mirack.go        # MiRack format handler (NO Fundamental plugin)
-│   │   ├── legacy.go        # Shared v0.6-style conversion logic + PluginMapper strategy
-│   │   ├── v2_test.go       # V2 format tests
-│   │   ├── vcvv06_test.go   # v0.6 format tests (Fundamental plugin mapping)
-│   │   └── mirack_test.go  # MiRack format tests (NoOp plugin mapping)
-│   └── patch/
-│       └── patch.go         # Shared data structures (Patch, Module, Cable)
+│   └── converter/
+│       ├── converter.go     # Single pipeline orchestration
+│       ├── format.go        # Format type definitions (Format enum, IsV2, etc.)
+│       ├── archive.go       # Zstd tar I/O (ExtractJSONFromV2, CreateV2Patch)
+│       ├── common.go        # Shared utilities (FromJSON, ToJSON, getInt64FromMap, etc.)
+│       ├── legacy.go        # V06StyleConfig + shared V0.6/MiRack baseline
+│       ├── metamodule.go    # MetaModule (HubMedium) module creation
+│       ├── v2.go            # V2 format handler (NormalizeV2, DenormalizeV2)
+│       ├── v06.go           # V0.6 format handler (uses legacy baseline + Fundamental plugin)
+│       ├── mirack.go        # MiRack format handler (uses legacy baseline + color conversion)
+│       ├── v2_test.go       # V2 format tests
+│       ├── vcvv06_test.go   # V0.6 format tests
+│       └── mirack_test.go  # MiRack format tests
 └── Makefile
 ```
 
 ### Data Flow
 
 ```
-input.vcv (v0.6 JSON or v2 archive)
-    ↓
-ConvertFile() reads file bytes
-    ↓
-[IsV2Format() check] ← If zstd magic bytes present, set Skipped=true
+input file → detectInputFormat() → Format + JSON bytes
     ↓
 FromJSON() → map[string]any
     ↓
-TransformPatch() → transforms in place
-    ├── Update version
-    ├── Assign module IDs
-    ├── Convert wires → cables
-    ├── Convert array indices → module IDs  ← CRITICAL
-    ├── Convert color format
-    ├── Convert disabled → bypass
-    ├── Convert paramId → id
-    └── Clean audio data
+Normalize[Format]() → converts to internal (v2-like) representation
+    ├─ V2: no-op (build mappings, validate)
+    ├─ V0.6: Fundamental→Core, wires→cables, indices→IDs
+    └─ MiRack: no plugin change, wires→cables, indices→IDs, colorIndex→hex
     ↓
-ToJSON() → JSON bytes
+[Optional: Add MetaModule]
     ↓
-CreateV2Patch() → tar+compress → output.vcv
-```
-
-### Format-Aware Pipeline Architecture
-
-The converter uses a format-aware pipeline with separate handlers for each format:
-
-```
-input file → FormatHandler.Read() → JSON bytes
-    ↓
-FromJSON() → map[string]any
-    ↓
-[Normalize*()] → converts format to internal (v2) representation
-    ↓
-[Denormalize*()] → converts internal to target format
+Denormalize[Format]() → converts from internal to target format
+    ├─ V2: ensure cables, bypass, module IDs
+    ├─ V0.6: Core→Fundamental, cables→wires, IDs→indices
+    └─ MiRack: no plugin change, cables→wires, IDs→indices, hex→colorIndex
     ↓
 ToJSON() → JSON bytes
     ↓
@@ -245,32 +225,54 @@ FormatHandler.Write() → output file
 
 | Feature | v0.6 | MiRack | v2 |
 |---------|------|--------|-----|
-| Fundamental plugin | ✅ Yes | ❌ No | ❌ No (merged into Core) |
+| Fundamental plugin | Yes | No | No (merged into Core) |
 | File container | zstd tar | Directory (.mrk) | zstd tar |
 | Cable/wire name | "wires" | "wires" | "cables" |
 | Cable references | Array indices | Array indices | Module IDs |
 | Parameter ID field | "paramId" | "paramId" | "id" |
 | Bypass field | "disabled" | "disabled" | "bypass" |
+| Cable color | Hex | colorIndex | Hex |
 
-### PluginMapper Strategy Pattern
+### V06StyleConfig Pattern
 
-The converter uses a strategy pattern for format-specific plugin mapping:
+V0.6 and MiRack share 90% of their conversion logic. The `V06StyleConfig` struct enables code reuse via function callbacks:
 
 ```go
-// PluginMapper defines how plugins are mapped between formats
-type PluginMapper interface {
-    NormalizePlugin(plugin, model string) (string, bool)   // Source → Internal
-    DenormalizePlugin(plugin, model string) (string, bool) // Internal → Target
+// V06StyleConfig contains format-specific overrides for V0.6-style formats.
+type V06StyleConfig struct {
+    FormatName     string                                // For logging
+    HasFundamental bool                                  // true=v0.6, false=MiRack
+    ConvertColor   func(cable map[string]any, issues *[]string)  // Color conversion
+    NormalizePlugin   func(plugin, model string) (string, bool)   // Source → Internal
+    DenormalizePlugin func(plugin, model string) (string, bool)   // Internal → Target
 }
 
-// NoOpPluginMapper - MiRack (no conversion needed)
-type NoOpPluginMapper struct{}
+// V0.6 uses this config:
+config := V06StyleConfig{
+    FormatName:     "v0.6",
+    HasFundamental: true,  // Has Fundamental plugin
+    ConvertColor:   nil,   // Uses hex already
+    NormalizePlugin:   func(p, m string) (string, bool) {
+        if p == "Fundamental" { return "Core", true }
+        return p, false
+    },
+    DenormalizePlugin: func(p, m string) (string, bool) {
+        if p == "Core" && fundamentalModules[m] { return "Fundamental", true }
+        return p, false
+    },
+}
 
-// V06PluginMapper - VCV Rack v0.6 (Fundamental ↔ Core)
-type V06PluginMapper struct{}
+// MiRack uses this config:
+config := V06StyleConfig{
+    FormatName:     "MiRack",
+    HasFundamental: false, // NO Fundamental plugin
+    ConvertColor:   convertMiRackColorIndexToHex,  // Special color handling
+    NormalizePlugin:   func(p, m string) (string, bool) { return p, false },  // No-op
+    DenormalizePlugin: func(p, m string) (string, bool) { return p, false },  // No-op
+}
 ```
 
-**Module Mapping Summary:**
+### Module Mapping Summary
 
 | Direction | Format | Plugin Conversion |
 |-----------|--------|-------------------|
@@ -279,18 +281,19 @@ type V06PluginMapper struct{}
 | MiRack → V2 | NormalizeMiRack | None (already all Core) |
 | V2 → MiRack | DenormalizeMiRack | None (stay all Core) |
 
-### Key Modules
+### Key Files
 
-| Package | Responsibility |
-|---------|----------------|
-| `converter` | Orchestration, file I/O, error handling |
-| `patch` | Type definitions for patch structures |
-| `main` | CLI parsing and user interaction |
-
-### Testing Strategy
-
-- **Unit tests** (`internal/converter/transform_test.go`) - Test transformation logic in isolation
-- **Integration tests** (`cmd/vrackconverter/main_test.go`) - Test end-to-end conversion
+| File | Purpose |
+|------|---------|
+| `converter.go` | `ConvertFile()`, `ConvertDirectory()`, format detection |
+| `format.go` | `Format` enum, `FormatHandler` interface |
+| `archive.go` | `ExtractJSONFromV2()`, `CreateV2Patch()`, `IsV2Format()` |
+| `common.go` | `FromJSON()`, `ToJSON()`, `getInt64FromMap()`, color helpers |
+| `legacy.go` | `NormalizeV06Style()`, `DenormalizeV06Style()`, `V06StyleConfig` |
+| `v2.go` | `NormalizeV2()`, `DenormalizeV2()`, `V2Handler` |
+| `v06.go` | `NormalizeV06()`, `DenormalizeV06()`, `V06Handler`, `fundamentalModules` |
+| `mirack.go` | `NormalizeMiRack()`, `DenormalizeMiRack()`, `MiRackHandler`, color palette |
+| `metamodule.go` | `createHubMediumModule()` for --metamodule flag |
 
 ---
 
@@ -298,9 +301,7 @@ type V06PluginMapper struct{}
 
 ### The Key Discovery
 
-**MiRack/v0.6 uses ARRAY INDICES for cable references, NOT module IDs.**
-
-This is the most important thing to understand when converting MiRack patches:
+**MiRack/v0.6 use ARRAY INDICES for cable references, NOT module IDs.**
 
 ```go
 // WRONG assumption:
@@ -311,25 +312,6 @@ This is the most important thing to understand when converting MiRack patches:
 // Cable references use array indices
 // inputModuleId=0 means "module at array index 0"
 ```
-
-### Evidence from MiRack Source Code
-
-In `/tmp/miRack/src/app/RackWidget.cpp`:
-
-```cpp
-// Line 288: Building moduleWidgets map
-json_array_foreach(modulesJ, moduleId, moduleJ) {
-    ModuleWidget *moduleWidget = moduleFromJson(moduleJ);
-    // ...
-    moduleWidgets[moduleId] = moduleWidget;  // moduleId is ARRAY INDEX
-}
-
-// Line 331: Looking up modules for wires
-ModuleWidget *outputModuleWidget = moduleWidgets[outputModuleId];
-ModuleWidget *inputModuleWidget = moduleWidgets[inputModuleId];
-```
-
-The variable `moduleId` is the **array index** from `json_array_foreach`, not the module's explicit ID field.
 
 ### Example
 
@@ -351,7 +333,7 @@ The wire references:
 - `outputModuleId: 7` = Array index 7 = PingPong_Widget (ID 8)
 - `inputModuleId: 0` = Array index 0 = AudioInterface (ID 1)
 
-The converter must transform this to:
+The converter transforms this to:
 ```json
 {
   "cables": [
@@ -360,11 +342,9 @@ The converter must transform this to:
 }
 ```
 
-## Conversion Algorithm
+### Conversion Implementation
 
-### Current Implementation
-
-Located in `internal/converter/transform.go`:
+Located in `internal/converter/legacy.go`:
 
 ```go
 // Pass 1: Build index-to-ID mapping
@@ -391,11 +371,24 @@ for _, c := range cables {
 }
 ```
 
-### Why This Matters
+### Roundtrip Mapping Preservation
 
-1. **VCV Rack 2 uses module IDs** in cable references
-2. **MiRack/v0.6 uses array indices** in cable references
-3. The converter MUST translate between these two systems
+To enable V2 → v0.6/MiRack conversion, the original index-to-ID mapping is stored:
+
+```go
+// During normalization - store the mapping
+patch["_originalIndexToID"] = indexToID
+
+// During denormalization - retrieve and reverse
+if indexToIDRaw, ok := patch["_originalIndexToID"]; ok {
+    // Reverse the mapping: module ID → array index
+    for idx, id := range indexToIDRaw {
+        idToIndex[id] = idx
+    }
+}
+```
+
+---
 
 ## Common Pitfalls
 
@@ -417,80 +410,104 @@ if moduleId >= len(modules) {
 
 ### Pitfall 2: Mixed References
 
-We initially thought MiRack used a mix of IDs and indices. This is WRONG.
-
 **All** cable references in MiRack/v0.6 are array indices, regardless of whether modules have explicit IDs.
 
 ### Pitfall 3: Preserving Module IDs but Not Converting Cables
 
 ```go
 // WRONG:
-// Preserve module IDs
 module["id"] = module["id"]  // Keep ID 1, 2, 3, etc.
-
-// But don't convert cable references
 cable["outputModuleId"] = wire["outputModuleId"]  // Still 0, 1, 2, etc.
-
-// This breaks because:
-// - Module with ID 1 exists (AudioInterface)
-// - Cable references module ID 0 (doesn't exist)
-// - VCV Rack silently ignores the broken cable
+// This breaks because module ID 0 doesn't exist, but array index 0 does
 ```
 
-## Known Issues
+---
 
-### Cable Skipping Bug (FIXED)
+## MiRack Color Handling
 
-**FIXED**: The converter now preserves all cables even when module IDs aren't found in the mapping.
+MiRack uses a fixed 6-color palette with integer indices (0-5) instead of hex colors.
 
-**Previous Behavior**: When converting V2 → MiRack, cables with module IDs not in the mapping were skipped with warnings:
-```
-MiRack denormalization: wire[0]: outputModuleId 1 not found in module list
-```
+### Color Palette
 
-**Solution**: The fix implements two improvements:
+| Index | Color Name | RGB | Hex |
+|-------|-----------|-----|-----|
+| 0 | Yellow | 255, 181, 0 | #ffb500 |
+| 1 | Red | 242, 56, 74 | #f2384a |
+| 2 | Green | 0, 181, 110 | #00b56e |
+| 3 | Teal | 54, 149, 239 | #3695ef |
+| 4 | Orange | 255, 181, 56 | #ffb538 |
+| 5 | Purple | 140, 74, 181 | #8c4ab5 |
 
-1. **Store `indexToID` mapping during normalization**: When converting v0.6/MiRack → V2, the original index-to-ID mapping is stored in `_originalIndexToID` field. This ensures the same mapping can be reversed during V2 → v0.6/MiRack conversion.
+### Conversion
 
-2. **Preserve cables instead of skipping**: When a module ID isn't found during denormalization, the cable is preserved with the original module ID (logged as a warning). The target application may handle missing modules differently.
+Located in `internal/converter/mirack.go`:
 
-**Implementation** (`internal/converter/legacy.go`):
 ```go
-// During normalization - store the mapping
-patch["_originalIndexToID"] = indexToID
-
-// During denormalization - retrieve and reverse
-if indexToIDRaw, ok := patch["_originalIndexToID"]; ok {
-    // Reverse the mapping: module ID → array index
-    for idx, id := range indexToIDRaw {
-        idToIndex[id] = idx
+// Normalize: colorIndex → hex
+func convertMiRackColorIndexToHex(cable map[string]any, issues *[]string) {
+    if colorIndex, ok := cable["colorIndex"]; ok {
+        idx := int(colorIndex.(float64))
+        hexColor := miRackColorIndexToHex(idx)
+        cable["color"] = hexColor
+        delete(cable, "colorIndex")
     }
 }
 
-// Preserve cable even if module reference not found
-if !outputExists {
-    *issues = append(*issues, fmt.Sprintf("outputModuleId %d not found (preserving with original ID)", outputModuleID))
-    // Keep original module ID - target application may handle missing modules
-} else {
-    wire["outputModuleId"] = outputIndex
+// Denormalize: hex → nearest colorIndex
+func convertHexToMiRackColorIndex(wire map[string]any, issues *[]string) {
+    if color, ok := wire["color"].(string); ok {
+        r, g, b, _ := hexToRGB(color)
+        wire["colorIndex"] = rgbToMiRackColorIndex(r, g, b)
+        delete(wire, "color")
+    }
 }
 ```
 
-## Port Number Mappings
+---
 
-Some modules have different port numbering between MiRack and VCV Rack 2.
+## V2 Format Detection
+
+The app detects v2 format by **checking the version field** in the patch JSON, not by compression format.
+
+**Critical**: Both VCV Rack v0.6 and v2 use zstd-compressed tar archives. Detection must be by version number:
+- v0.6 patches have version "0.x.x" (e.g., "0.6.2")
+- v2 patches have version "2.x.x" (e.g., "2.6.6")
+
+**File formats:**
+- **MiRack (.mrk)**: Directory bundle containing plain JSON `patch.vcv` file
+- **VCV Rack v0.6**: Zstd-compressed tar archive with version "0.x.x"
+- **VCV Rack v2**: Zstd-compressed tar archive with version "2.x.x"
+
+### Implementation
+
+Located in `internal/converter/archive.go`:
+
+```go
+// IsV2Format extracts the version field and checks if it starts with "2."
+func IsV2Format(data []byte) bool {
+    version, err := extractVersion(data)
+    if err != nil {
+        return false
+    }
+    return strings.HasPrefix(version, "2.")
+}
+```
+
+### Result States
+
+| State | Success | Skipped | Error | Exit Code |
+|-------|---------|---------|-------|-----------|
+| Converted | true | false | nil | 0 |
+| Already v2 | false | true | nil | 0 |
+| Error | false | false | set | 1 |
+
+---
 
 ## MetaModule Support
 
-The `-m, --metamodule` flag adds a 4ms MetaModule module to converted patches. This enables preset mapping and modular storage functionality.
+The `-m, --metamodule` flag adds a 4ms MetaModule (HubMedium) module to converted patches.
 
-**Note**: In VCV Rack, the 4ms MetaModule module is called "HubMedium" (plugin: "4msCompany", model: "HubMedium"). The code uses this internal name, but the feature is referred to as "MetaModule" in user-facing documentation.
-
-### How It Works
-
-1. **Module Addition**: When `--metamodule` is specified, a MetaModule (HubMedium) module is added to the output patch
-2. **Positioning**: MetaModule is placed immediately after the rightmost module at Y=0 (top row)
-3. **Patch Name**: Uses the input filename (without extension) as the patch name in MetaModule
+**Note**: In VCV Rack, the 4ms MetaModule module is called "HubMedium" (plugin: "4msCompany", model: "HubMedium").
 
 ### Usage
 
@@ -504,61 +521,37 @@ vrackconverter input.mrk -m  # Auto-generates .vcv with MetaModule
 Located in `internal/converter/metamodule.go`:
 
 ```go
-// createHubMediumModule generates a HubMedium (4ms MetaModule) with:
+// createHubMediumModule generates a HubMedium with:
 // - Plugin: "4msCompany", Model: "HubMedium"
 // - 14 parameters (12 knobs @ 0.5, 2 mode params @ 0)
-// - Default data structure with empty mappings
 // - Positioned at maxX + 1 (immediately after rightmost module)
 func createHubMediumModule(existingModules []any, root map[string]any, inputFilename string) map[string]any
 ```
 
-### Notes
+---
 
-- HubMedium is the 4ms MetaModule module in VCV Rack
-- The module is added silently (no warning message)
-- Patch name comes from filename since MiRack patches lack `name`/`description` fields
-- Position assumes 1 HP spacing; manual adjustment may be needed if modules overlap
+## Adding a New Format
 
-### Example: Plaits
+The Normalize/Denormalize pattern enables scalable conversions:
 
-**VCV Rack 2:**
-- Outputs: 0 (OUT), 1 (AUX)
-
-**MiRack:**
-- May have different port numbers
-- Port mappings can be added to `portMappings` in transform.go
-
-```go
-var portMappings = map[string]map[string]map[int64]int64{
-    "AudibleInstruments/Plaits": {
-        "outputs": {
-            12: 0,  // Map old port 12 to main OUT (0)
-        },
-    },
-}
+```
+                    Normalize (to v2-like)        Denormalize (from v2-like)
+                    ┌─────────────────────┐      ┌──────────────────────┐
+V0.6 ─────────────▶│  V0.6 → common      │─────▶│  common → V0.6       │◀─────── V0.6
+MiRack ───────────▶│  MiRack → common    │─────▶│  common → MiRack     │◀─────── MiRack
+V2 ───────────────▶│  V2 → common (noop) │─────▶│  common → V2 (noop)  │◀─────── V2
+Cardinal ──────────▶│  Cardinal → common  │─────▶│  common → Cardinal   │◀─────── Cardinal
+                    └─────────────────────┘      └──────────────────────┘
 ```
 
-## Test Cases
+**Adding a new format** requires:
+1. Create handler functions: `Read()`, `Write()`, `Extension()`
+2. Create `NormalizeX()` and `DenormalizeX()` functions
+3. Add cases to the switch statements in `ConvertFile()`
 
-### Critical Test: Array Index Conversion
+**Any conversion** works as: `source.Normalize() → target.Denormalize()`
 
-```go
-func TestArrayIndexConversion(t *testing.T) {
-    patch := `{
-        "modules": [
-            {"id": 1, "model": "AudioInterface"},
-            {"id": 2, "model": "Plaits"}
-        ],
-        "wires": [
-            {"outputModuleId": 1, "inputModuleId": 0}  // Array indices!
-        ]
-    }`
-
-    // After conversion:
-    // outputModuleId should be 2 (Plaits, was array index 1)
-    // inputModuleId should be 1 (AudioInterface, was array index 0)
-}
-```
+---
 
 ## Debugging Tips
 
@@ -574,129 +567,15 @@ func TestArrayIndexConversion(t *testing.T) {
    tar --zstd -xOf patch.vcv patch.json | jq '.modules[].id'
    ```
 
-3. Verify cable references match module IDs:
-   ```bash
-   # All cable references should be in the module ID list
-   ```
+3. Verify cable references match module IDs
 
 ### If cables go to wrong modules:
 
-1. Check if the original patch uses array indices (it should!)
+1. Check if the original patch uses array indices
 2. Verify the index-to-ID mapping is correct
 3. Check module order hasn't changed during conversion
 
-## V2 Format Detection
-
-### How It Works
-
-The app detects v2 format by **checking the version field** in the patch JSON, not by compression format.
-
-**Critical**: Both VCV Rack v0.6 and v2 use zstd-compressed tar archives. Detection must be by version number:
-- v0.6 patches have version "0.x.x" (e.g., "0.6.2")
-- v2 patches have version "2.x.x" (e.g., "2.6.6")
-
-**File formats:**
-- **MiRack (.mrk)**: Directory bundle containing plain JSON `patch.vcv` file
-- **VCV Rack v0.6**: Zstd-compressed tar archive with version "0.x.x"
-- **VCV Rack v2**: Zstd-compressed tar archive with version "2.x.x"
-
-The test files in `test/` are MiRack exports (plain JSON), not VCV Rack v0.6 exports.
-
-### Implementation
-
-Located in `internal/converter/archive.go`:
-
-```go
-// IsV2Format extracts the version field and checks if it starts with "2."
-func IsV2Format(data []byte) bool {
-    version, err := extractVersion(data)
-    if err != nil {
-        return false
-    }
-    return strings.HasPrefix(version, "2.")
-}
-
-// extractVersion handles both plain JSON and zstd-compressed tar archives
-func extractVersion(data []byte) (string, error) {
-    // 1. Try parsing as plain JSON
-    // 2. If that fails, try as zstd tar archive
-    // 3. Extract version from patch.json (handles both "patch.json" and "./patch.json")
-}
-```
-
-**Note**: Some v2 archives (especially those created by certain tools) use `./patch.json` as the tar entry name instead of `patch.json`. The extractor handles both variants.
-```
-
-### Result States
-
-The `Result` struct has three possible states:
-
-| State | Success | Skipped | Error | Exit Code |
-|-------|---------|---------|-------|-----------|
-| Converted | true | false | nil | 0 |
-| Already v2 | false | true | nil | 0 |
-| Error | false | false | set | 1 |
-
-### CLI Behavior
-
-```bash
-# Single v2 file:
-$ ./vrackconverter already-v2.vcv -o output.vcv
-info: file is already in VCV Rack v2 format (no conversion needed)
-# Exit code: 0
-
-# Mixed directory:
-$ ./vrackconverter ./mixed/ -o ./output/
-Converting directory: ./mixed/ -> ./output/
-  ✓ v06-patch.vcv
-  ⊘ already-v2.vcv (already v2)
-
-Complete: 1 succeeded, 1 skipped, 0 failed
-# Exit code: 0
-```
-
-## File Format Differences
-
-### MiRack (.mrk bundles)
-- Structure: Directory containing `patch.vcv` (plain JSON)
-- Wires: Called "wires"
-- Module IDs: Optional
-- Cable refs: Array indices
-
-### VCV Rack v0.6
-- File: Zstd-compressed tar archive (same format as v2)
-- Version: "0.x.x" in patch.json
-- Wires: Called "wires"
-- Module IDs: Optional
-- Cable refs: Array indices
-
-### VCV Rack v2.x
-- File: Zstd-compressed tar archive
-- Wires: Called "cables"
-- Module IDs: Required
-- Cable refs: Module IDs
-
-## Lessons Learned
-
-1. **Always check source code** - Don't assume, read the actual implementation
-2. **Array indices vs IDs** - This is the #1 conversion issue
-3. **Test with real patches** - Synthetic tests miss real-world issues
-4. **Validate both sides** - Check the original AND converted patch
-5. **User feedback is gold** - The user spotted the issue immediately
-
-## References
-
-- MiRack source: https://github.com/miRackModular/Rack
-- Key file: `src/app/RackWidget.cpp` lines 280-370
-- VCV Rack 2 source: https://github.com/VCVRack/Rack
-- Key file: `src/app/RackWidget.cpp` lines 396-448
-
-## Future Improvements
-
-1. **Better validation** - Detect when cables reference out-of-range indices
-2. **Port mapping database** - Collect known port mappings from community
-3. **Batch testing** - Test converter against many MiRack patches
-4. **Visual diff** - Tool to show cable differences before/after conversion
+---
 
 ## Quick Reference
 
@@ -712,77 +591,26 @@ make test
 
 ### Convert
 ```bash
-./vrackconverter input.vcv -o output.vcv --overwrite
+# MiRack to V2
+./vrackconverter input.mrk
+
+# V2 to MiRack
+./vrackconverter input.vcv -o output.mrk
+
+# In-place conversion
+./vrackconverter input.vcv --overwrite
 ```
 
 ---
 
 ## CI/CD & Releases
 
-### GitHub Actions Workflow
+For GitHub Actions workflow details, see [.github/workflows/README.md](.github/workflows/README.md).
 
-**Location**: `.github/workflows/build.yml`
+For Makefile build targets and variables, see [Makefile.md](Makefile.md).
 
-**Jobs**:
-1. **test** - Runs on every push/PR to `ubuntu-latest`
-2. **build** - Cross-compiles all platforms from single `ubuntu-latest` runner (only on version tags)
-3. **release** - Creates GitHub release with checksums (only on version tags)
+### Quick Links
 
-### Build Platforms
-
-| Platform | Archive | Binary |
-|----------|---------|--------|
-| linux-amd64 | `vrackconverter-linux-amd64.tar.gz` | `vrackconverter` |
-| linux-arm64 | `vrackconverter-linux-arm64.tar.gz` | `vrackconverter` |
-| darwin-amd64 | `vrackconverter-darwin-amd64.tar.gz` | `vrackconverter` |
-| darwin-arm64 | `vrackconverter-darwin-arm64.tar.gz` | `vrackconverter` |
-| windows-amd64 | `vrackconverter-windows-amd64.zip` | `vrackconverter.exe` |
-| windows-arm64 | `vrackconverter-windows-arm64.zip` | `vrackconverter.exe` |
-
-### Cross-Compilation
-
-All builds are done from a single Linux runner using Go's cross-compilation:
-- `CGO_ENABLED=0` - Pure Go builds (no C dependencies)
-- `GOOS` and `GOARCH` set via environment variables
-- Binaries are statically linked and portable
-
-### Release Process
-
-```bash
-# 1. Commit and push changes to main
-git checkout main && git pull
-
-# 2. Create and push version tag
-git tag -a v1.0.0 -m "Release 1.0.0"
-git push origin v1.0.0
-
-# 3. GitHub Actions builds and creates release automatically
-#    - Builds all 6 platform binaries
-#    - Creates tar.gz/zip archives (each contains a directory with the binary)
-#    - Generates SHA256 checksums (checksums.txt)
-#    - Creates GitHub release with release notes (excludes co-authored commits)
-```
-
-### Re-running a Release
-
-If the release fails, fix the issue and recreate the tag:
-
-```bash
-# Delete tag locally and remotely
-git tag -d v1.0.0
-git push origin :refs/tags/v1.0.0
-
-# Recreate tag
-git tag -a v1.0.0 -m "Release 1.0.0"
-git push origin v1.0.0
-```
-
-### Go Version
-
-- **CI/CD**: Go 1.23
-- **Local development**: Go 1.23+ recommended
-
-### Dependencies
-
-- `github.com/klauspost/compress/zstd` - Pure Go zstd compression (required for v2 patch format)
-- No other external dependencies
+- **Build Platforms**: linux, darwin, windows × amd64, arm64
+- **Go Version**: 1.23
+- **Dependencies**: `github.com/klauspost/compress/zstd` (pure Go)

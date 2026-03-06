@@ -32,10 +32,6 @@ func (h *V06Handler) Extension() string {
 	return ".vcv"
 }
 
-// v06Converter is the shared converter instance for v0.6 format.
-// Uses V06PluginMapper to handle Fundamental ↔ Core conversion.
-var v06Converter = NewLegacyConverter(V06PluginMapper{})
-
 // NormalizeV06 converts v0.6 format to internal (v2) format.
 //
 // v0.6-specific behavior:
@@ -45,7 +41,31 @@ var v06Converter = NewLegacyConverter(V06PluginMapper{})
 // - paramId → id in parameters
 // - disabled → bypass
 func NormalizeV06(patch map[string]any, issues *[]string) error {
-	return v06Converter.NormalizeLegacy(patch, issues, "v0.6")
+	config := V06StyleConfig{
+		FormatName:        "v0.6",
+		HasFundamental:    true, // v0.6 has Fundamental plugin
+		ConvertColor:      nil,  // v0.6 uses hex, no conversion needed
+		NormalizePlugin:   normalizeV06Plugin,
+		DenormalizePlugin: denormalizeV06Plugin,
+	}
+	return NormalizeV06Style(patch, config, issues)
+}
+
+// normalizeV06Plugin converts Fundamental → Core for v0.6 → v2 conversion.
+func normalizeV06Plugin(plugin, model string) (string, bool) {
+	if plugin == "Fundamental" {
+		return "Core", true
+	}
+	return plugin, false
+}
+
+// denormalizeV06Plugin converts Core → Fundamental for v2 → v0.6 conversion.
+// Only modules that were originally in Fundamental plugin are converted back.
+func denormalizeV06Plugin(plugin, model string) (string, bool) {
+	if plugin == "Core" && fundamentalModules[model] {
+		return "Fundamental", true
+	}
+	return plugin, false
 }
 
 // DenormalizeV06 converts internal (v2) format to v0.6 format.
@@ -57,5 +77,12 @@ func NormalizeV06(patch map[string]any, issues *[]string) error {
 // - bypass → disabled
 // - id → paramId in parameters
 func DenormalizeV06(patch map[string]any, issues *[]string) error {
-	return v06Converter.DenormalizeLegacy(patch, issues, "v0.6")
+	config := V06StyleConfig{
+		FormatName:        "v0.6",
+		HasFundamental:    true,
+		ConvertColor:      nil,
+		NormalizePlugin:   normalizeV06Plugin,
+		DenormalizePlugin: denormalizeV06Plugin,
+	}
+	return DenormalizeV06Style(patch, config, issues)
 }

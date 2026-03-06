@@ -297,42 +297,6 @@ func TestNormalizeMiRack(t *testing.T) {
 		}
 	})
 
-	t.Run("converts color format", func(t *testing.T) {
-		mirackJSON := `{
-			"version": "0.6.2",
-			"modules": [
-				{"id": 1, "plugin": "Core", "model": "AudioInterface", "params": []}
-			],
-			"wires": [
-				{
-					"outputModuleId": 0,
-					"outputId": 0,
-					"inputModuleId": 0,
-					"inputId": 0,
-					"color": {"r": 1.0, "g": 0.0, "b": 0.0, "a": 1.0}
-				}
-			]
-		}`
-
-		var patch map[string]any
-		if err := json.Unmarshal([]byte(mirackJSON), &patch); err != nil {
-			t.Fatalf("Failed to parse JSON: %v", err)
-		}
-
-		var issues []string
-		if err := NormalizeMiRack(patch, &issues); err != nil {
-			t.Fatalf("NormalizeMiRack failed: %v", err)
-		}
-
-		cables := patch["cables"].([]any)
-		cable := cables[0].(map[string]any)
-
-		// Color should be converted to hex string
-		if color, ok := cable["color"].(string); !ok || color != "ff0000ff" {
-			t.Errorf("Expected color 'ff0000ff', got %v", cable["color"])
-		}
-	})
-
 	t.Run("handles modules without IDs", func(t *testing.T) {
 		mirackJSON := `{
 			"version": "0.6.2",
@@ -580,53 +544,6 @@ func TestDenormalizeMiRack(t *testing.T) {
 			if _, hasParamID := param["paramId"]; !hasParamID {
 				t.Errorf("Param %d: missing 'paramId' field", i)
 			}
-		}
-	})
-
-	t.Run("removes cable ID and color", func(t *testing.T) {
-		v2JSON := `{
-			"version": "2.6.6",
-			"modules": [
-				{"id": 1, "plugin": "Core", "model": "AudioInterface", "params": []}
-			],
-			"cables": [
-				{
-					"id": 42,
-					"outputModuleId": 1,
-					"outputId": 0,
-					"inputModuleId": 1,
-					"inputId": 0,
-					"color": "ff0000ff"
-				}
-			]
-		}`
-
-		var patch map[string]any
-		if err := json.Unmarshal([]byte(v2JSON), &patch); err != nil {
-			t.Fatalf("Failed to parse JSON: %v", err)
-		}
-
-		// Normalize first
-		var issues []string
-		if err := NormalizeV2(patch, &issues); err != nil {
-			t.Fatalf("NormalizeV2 failed: %v", err)
-		}
-
-		// Then denormalize to MiRack format
-		issues = nil
-		if err := DenormalizeMiRack(patch, &issues); err != nil {
-			t.Fatalf("DenormalizeMiRack failed: %v", err)
-		}
-
-		wires := patch["wires"].([]any)
-		wire := wires[0].(map[string]any)
-
-		if _, hasID := wire["id"]; hasID {
-			t.Error("Cable 'id' should be removed (MiRack doesn't use cable IDs)")
-		}
-
-		if _, hasColor := wire["color"]; hasColor {
-			t.Error("Cable 'color' should be removed (MiRack uses colorIndex, not hex)")
 		}
 	})
 

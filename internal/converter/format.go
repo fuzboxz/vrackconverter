@@ -146,5 +146,5 @@ func SupportedSourceFormats() []Format {
 
 // SupportedTargetFormats returns all formats that can be used as conversion targets.
 func SupportedTargetFormats() []Format {
-	return []Format{FormatVCV2}
+	return []Format{FormatVCV2, FormatVCV06}
 }

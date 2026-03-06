@@ -182,7 +182,7 @@ func main() {
 		}
 		// Note: .mrk files themselves are never modified since outputPath != inputPath
 		// The --overwrite flag controls whether the auto-generated .vcv can be overwritten
-		convertFile(inputPath, outputPath, opts)
+		doConvert(inputPath, outputPath, opts)
 		return
 	}
 
@@ -204,7 +204,7 @@ func main() {
 				os.Exit(1)
 			}
 		}
-		convertDirectory(inputPath, outputPath, opts)
+		doConvertDirectory(inputPath, outputPath, opts)
 		return
 	}
 
@@ -216,24 +216,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Check if output is .mrk (V2 → MiRack conversion)
-	if strings.ToLower(filepath.Ext(outputPath)) == ".mrk" {
-		// Use new format-aware pipeline for V2 → MiRack
-		convertFileWithPipeline(inputPath, outputPath, opts)
-		return
-	}
-
-	// Original V0.6/MiRack → V2 conversion (legacy path)
+	// In-place conversion: output = input
 	if outputPath == "" && overwrite {
-		// In-place conversion: output = input
 		outputPath = inputPath
 	}
 
-	// Single file conversion
-	convertFile(inputPath, outputPath, opts)
+	doConvert(inputPath, outputPath, opts)
 }
 
-func convertFileWithPipeline(inputPath, outputPath string, opts converter.Options) {
+func doConvert(inputPath, outputPath string, opts converter.Options) {
 	if !opts.Quiet {
 		if inputPath == outputPath {
 			fmt.Printf("Converting: %s (in place)\n", inputPath)
@@ -242,7 +233,7 @@ func convertFileWithPipeline(inputPath, outputPath string, opts converter.Option
 		}
 	}
 
-	result := converter.ConvertFileWithPipeline(inputPath, outputPath, opts)
+	result := converter.ConvertFile(inputPath, outputPath, opts)
 	if result.Skipped {
 		fmt.Fprintf(os.Stderr, "info: file is already in target format (no conversion needed)\n")
 		os.Exit(0)
@@ -263,38 +254,7 @@ func convertFileWithPipeline(inputPath, outputPath string, opts converter.Option
 	}
 }
 
-func convertFile(inputPath, outputPath string, opts converter.Options) {
-	if !opts.Quiet {
-		if inputPath == outputPath {
-			fmt.Printf("Converting: %s (in place)\n", inputPath)
-		} else {
-			fmt.Printf("Converting: %s -> %s\n", inputPath, outputPath)
-		}
-	}
-
-	result := converter.ConvertFile(inputPath, outputPath, opts)
-	if result.Skipped {
-		// File is already v2 format - informational, not an error
-		fmt.Fprintf(os.Stderr, "info: file is already in VCV Rack v2 format (no conversion needed)\n")
-		os.Exit(0)
-	}
-	if !result.Success {
-		fmt.Fprintf(os.Stderr, "error: %v\n", result.Error)
-		os.Exit(1)
-	}
-
-	if !opts.Quiet {
-		if len(result.Issues) > 0 {
-			fmt.Printf("  Warnings:\n")
-			for _, issue := range result.Issues {
-				fmt.Printf("    - %s\n", issue)
-			}
-		}
-		fmt.Println("  Done!")
-	}
-}
-
-func convertDirectory(inputDir, outputDir string, opts converter.Options) {
+func doConvertDirectory(inputDir, outputDir string, opts converter.Options) {
 	if !opts.Quiet {
 		fmt.Printf("Converting directory: %s -> %s\n", inputDir, outputDir)
 	}
