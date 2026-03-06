@@ -53,9 +53,10 @@ func GetFormatHandler(fmt Format) FormatHandler {
 }
 
 type Options struct {
-	Overwrite  bool
-	Quiet      bool
-	MetaModule bool // Add 4ms HubMedium module to output
+	Overwrite    bool
+	Quiet        bool
+	MetaModule   bool   // Add 4ms HubMedium module to output
+	OutputFormat Format // Explicit output format (overrides file extension)
 }
 
 type Result struct {
@@ -98,8 +99,13 @@ func ConvertFile(inputPath, outputPath string, opts Options) Result {
 		outputFmt = FormatVCV2 // Default to v2
 	}
 
+	// Use explicit format if specified (overrides file extension)
+	if opts.OutputFormat != "" {
+		outputFmt = opts.OutputFormat
+	}
+
 	// Skip if same format and no conversion needed
-	if inputFmt == outputFmt && inputFmt.IsV2() {
+	if inputFmt == outputFmt {
 		result.Skipped = true
 		return result
 	}
@@ -109,6 +115,17 @@ func ConvertFile(inputPath, outputPath string, opts Options) Result {
 	if err != nil {
 		result.Error = err
 		return result
+	}
+
+	// Validate MiRack audio module constraints (for both MiRack input and output)
+	if (inputFmt == FormatMiRack || outputFmt == FormatMiRack) && root != nil {
+		if modules, ok := root["modules"].([]any); ok {
+			if valid, reason := validateAudioModuleCount(modules); !valid {
+				result.Skipped = true
+				result.Issues = []string{reason}
+				return result
+			}
+		}
 	}
 
 	var issues []string
@@ -194,14 +211,18 @@ func ConvertFile(inputPath, outputPath string, opts Options) Result {
 
 // detectInputFormat detects the format of the input file and returns the data and format.
 func detectInputFormat(inputPath string) ([]byte, Format, error) {
-	// Try MiRack handler first (for .mrk bundles)
-	mrkHandler := &MiRackHandler{}
-	data, err := mrkHandler.Read(inputPath)
-	if err == nil {
+	// Check file extension first - .mrk bundles are MiRack format
+	ext := strings.ToLower(filepath.Ext(inputPath))
+	if ext == ".mrk" {
+		mrkHandler := &MiRackHandler{}
+		data, err := mrkHandler.Read(inputPath)
+		if err != nil {
+			return nil, FormatUnknown, fmt.Errorf("failed to read MiRack bundle: %w", err)
+		}
 		return data, FormatMiRack, nil
 	}
 
-	// Check if .vcv file is v2 or v0.6 format
+	// For .vcv files, check if v2 or v0.6 format
 	rawData, err := os.ReadFile(inputPath)
 	if err != nil {
 		return nil, FormatUnknown, fmt.Errorf("failed to read input: %w", err)
@@ -256,6 +277,14 @@ func ConvertDirectory(inputDir, outputDir string, opts Options) []Result {
 		return results
 	}
 
+	// Determine output format for extension mapping
+	targetFormat := opts.OutputFormat
+	if targetFormat == "" {
+		targetFormat = FormatVCV2 // Default to V2
+	}
+	targetHandler := GetFormatHandler(targetFormat)
+	targetExt := targetHandler.Extension()
+
 	for _, entry := range entries {
 		name := entry.Name()
 		ext := strings.ToLower(filepath.Ext(name))
@@ -272,16 +301,20 @@ func ConvertDirectory(inputDir, outputDir string, opts Options) []Result {
 
 		var actualInputPath, actualOutputPath string
 
+		// Get base name without extension
+		baseName := name[:len(name)-len(filepath.Ext(name))]
+
 		if ext == ".mrk" {
 			// .mrk is a directory bundle containing patch.vcv
-			actualInputPath = filepath.Join(inputDir, name, "patch.vcv")
-			// Output becomes .vcv with same base name
-			baseName := name[:len(name)-len(filepath.Ext(name))]
-			actualOutputPath = filepath.Join(outputDir, baseName+".vcv")
+			// Use the .mrk directory path for input (for format detection)
+			actualInputPath = filepath.Join(inputDir, name)
+			// Output uses target format extension
+			actualOutputPath = filepath.Join(outputDir, baseName+targetExt)
 		} else {
 			// Regular .vcv file
 			actualInputPath = filepath.Join(inputDir, name)
-			actualOutputPath = filepath.Join(outputDir, name)
+			// Output uses target format extension
+			actualOutputPath = filepath.Join(outputDir, baseName+targetExt)
 		}
 
 		result := ConvertFile(actualInputPath, actualOutputPath, opts)

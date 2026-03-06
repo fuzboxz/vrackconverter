@@ -10,13 +10,14 @@ import (
 )
 
 var (
-	Version     = "dev"
-	showHelp    bool
-	showVersion bool
-	outputPath  string
-	overwrite   bool
-	quiet       bool
-	metamodule  bool
+	Version      = "dev"
+	showHelp     bool
+	showVersion  bool
+	outputPath   string
+	outputFormat string
+	overwrite    bool
+	quiet        bool
+	metamodule   bool
 )
 
 func init() {
@@ -26,6 +27,7 @@ func init() {
 	flag.BoolVar(&showVersion, "version", false, "Show version")
 	flag.StringVar(&outputPath, "o", "", "Output file/directory")
 	flag.StringVar(&outputPath, "output", "", "Output file/directory")
+	flag.StringVar(&outputFormat, "format", "", "Output format: v2, v06, or mirack (overrides file extension)")
 	flag.BoolVar(&overwrite, "overwrite", false, "Overwrite input file in place")
 	flag.BoolVar(&quiet, "q", false, "Suppress non-error output")
 	flag.BoolVar(&quiet, "quiet", false, "Suppress non-error output")
@@ -49,6 +51,7 @@ Arguments:
 
 Flags:
   -o, --output <path>    Output file/directory (if not specified, requires --overwrite)
+      --format <fmt>     Output format: v2, v06, or mirack (overrides file extension)
       --overwrite        Overwrite input file in place
   -m, --metamodule       Add 4ms MetaModule (HubMedium) to patch
   -q, --quiet            Suppress non-error output
@@ -64,6 +67,10 @@ Examples:
   # V2 to MiRack (NEW)
   vrackconverter v2-patch.vcv -o output.mrk       # Creates output.mrk bundle
   vrackconverter ./v2-patches/ -o ./mirack/        # Batch convert to MiRack
+
+  # Explicit format selection (NEW)
+  vrackconverter input.vcv -o output.vcv --format v06  # Force v0.6 format
+  vrackconverter input.vcv --overwrite --format v06     # In-place to v0.6
 
   # In-place
   vrackconverter old-patch.vcv --overwrite
@@ -102,6 +109,20 @@ func directoryContainsMrkFiles(dirPath string) bool {
 	return hasMrk && !hasVcv
 }
 
+// parseOutputFormat converts a format string to a Format type.
+func parseOutputFormat(formatStr string) (converter.Format, error) {
+	switch strings.ToLower(strings.TrimSpace(formatStr)) {
+	case "v2", "vcv2", "2":
+		return converter.FormatVCV2, nil
+	case "v06", "v0.6", "vcv06", "vcv0.6", "0.6", "06":
+		return converter.FormatVCV06, nil
+	case "mirack", "mrk":
+		return converter.FormatMiRack, nil
+	default:
+		return "", fmt.Errorf("invalid format: %s (must be v2, v06, or mirack)", formatStr)
+	}
+}
+
 func main() {
 	flag.Usage = printUsage
 
@@ -117,6 +138,11 @@ func main() {
 		case "-o", "--output":
 			if i+1 < len(args) {
 				outputPath = args[i+1]
+				i++ // skip the value
+			}
+		case "--format":
+			if i+1 < len(args) {
+				outputFormat = args[i+1]
 				i++ // skip the value
 			}
 		case "--overwrite":
@@ -158,6 +184,16 @@ func main() {
 		Overwrite:  overwrite,
 		Quiet:      quiet,
 		MetaModule: metamodule,
+	}
+
+	// Parse output format if specified
+	if outputFormat != "" {
+		format, err := parseOutputFormat(outputFormat)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		opts.OutputFormat = format
 	}
 
 	// Check for .mrk bundles BEFORE directory check, since .mrk bundles are directories
@@ -235,7 +271,12 @@ func doConvert(inputPath, outputPath string, opts converter.Options) {
 
 	result := converter.ConvertFile(inputPath, outputPath, opts)
 	if result.Skipped {
-		fmt.Fprintf(os.Stderr, "info: file is already in target format (no conversion needed)\n")
+		if len(result.Issues) > 0 {
+			// Validation skip (e.g., MiRack audio module constraints)
+			fmt.Fprintf(os.Stderr, "info: %s (skipped)\n", result.Issues[0])
+		} else {
+			fmt.Fprintf(os.Stderr, "info: file is already in target format (no conversion needed)\n")
+		}
 		os.Exit(0)
 	}
 	if !result.Success {
@@ -270,7 +311,11 @@ func doConvertDirectory(inputDir, outputDir string, opts converter.Options) {
 		if result.Skipped {
 			skipCount++
 			if !opts.Quiet {
-				fmt.Printf("  ⊘ %s (already v2)\n", relPath)
+				if len(result.Issues) > 0 {
+					fmt.Printf("  ⊘ %s (%s)\n", relPath, result.Issues[0])
+				} else {
+					fmt.Printf("  ⊘ %s (already in target format)\n", relPath)
+				}
 			}
 		} else if result.Success {
 			successCount++

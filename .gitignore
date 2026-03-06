@@ -38,3 +38,6 @@ Thumbs.db
 .claude/memory/
 .claude/projects/
 /tmp/
+
+# Test temp folder
+test/temp/

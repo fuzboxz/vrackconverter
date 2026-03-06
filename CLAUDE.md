@@ -182,10 +182,9 @@ vrackconverter/
 │       ├── metamodule.go    # MetaModule (HubMedium) module creation
 │       ├── v2.go            # V2 format handler (NormalizeV2, DenormalizeV2)
 │       ├── v06.go           # V0.6 format handler (uses legacy baseline + Fundamental plugin)
-│       ├── mirack.go        # MiRack format handler (uses legacy baseline + color conversion)
-│       ├── v2_test.go       # V2 format tests
-│       ├── vcvv06_test.go   # V0.6 format tests
-│       └── mirack_test.go  # MiRack format tests
+│       ├── mirack.go        # MiRack format handler (module name mappings, color conversion)
+│       ├── *_test.go        # Unit tests (co-located with source files)
+│       └── mirack_cables_test.go  # Fixture-based test for test/mirack_cables.mrk
 └── Makefile
 ```
 
@@ -199,14 +198,14 @@ FromJSON() → map[string]any
 Normalize[Format]() → converts to internal (v2-like) representation
     ├─ V2: no-op (build mappings, validate)
     ├─ V0.6: Fundamental→Core, wires→cables, indices→IDs
-    └─ MiRack: no plugin change, wires→cables, indices→IDs, colorIndex→hex
+    └─ MiRack: module name mappings, wires→cables, indices→IDs, colorIndex→hex
     ↓
 [Optional: Add MetaModule]
     ↓
 Denormalize[Format]() → converts from internal to target format
     ├─ V2: ensure cables, bypass, module IDs
     ├─ V0.6: Core→Fundamental, cables→wires, IDs→indices
-    └─ MiRack: no plugin change, cables→wires, IDs→indices, hex→colorIndex
+    └─ MiRack: module name mappings (reverse), cables→wires, IDs→indices, hex→colorIndex
     ↓
 ToJSON() → JSON bytes
     ↓
@@ -218,14 +217,14 @@ FormatHandler.Write() → output file
 | Format | Handler | File Container | Plugin Semantics |
 |--------|---------|----------------|------------------|
 | **VCV Rack v0.6** | `V06Handler` | Zstd tar archive | Has Fundamental + Core plugins |
-| **MiRack** | `MiRackHandler` | Directory bundle (.mrk) | NO Fundamental plugin (all Core) |
-| **VCV Rack v2** | `V2Handler` (default) | Zstd tar archive | Core only (Fundamental merged in) |
+| **MiRack** | `MiRackHandler` | Directory bundle (.mrk) | Uses Core and Fundamental plugins |
+| **VCV Rack v2** | `V2Handler` (default) | Zstd tar archive | Core + Fundamental plugins |
 
 ### Key Format Differences
 
 | Feature | v0.6 | MiRack | v2 |
 |---------|------|--------|-----|
-| Fundamental plugin | Yes | No | No (merged into Core) |
+| Fundamental plugin | Yes | Converted to Core/Fundamental as needed | Yes |
 | File container | zstd tar | Directory (.mrk) | zstd tar |
 | Cable/wire name | "wires" | "wires" | "cables" |
 | Cable references | Array indices | Array indices | Module IDs |
@@ -274,12 +273,12 @@ config := V06StyleConfig{
 
 ### Module Mapping Summary
 
-| Direction | Format | Plugin Conversion |
-|-----------|--------|-------------------|
+| Direction | Format | Conversion |
+|-----------|--------|------------|
 | v0.6 → V2 | NormalizeV06 | Fundamental → Core |
 | V2 → v0.6 | DenormalizeV06 | Core → Fundamental (for known modules) |
-| MiRack → V2 | NormalizeMiRack | None (already all Core) |
-| V2 → MiRack | DenormalizeMiRack | None (stay all Core) |
+| MiRack → V2 | NormalizeMiRack | Module name mappings (e.g., MIDIBasicInterfaceOut → CV-MIDI) |
+| V2 → MiRack | DenormalizeMiRack | Reverse module name mappings |
 
 ### Key Files
 
@@ -292,7 +291,7 @@ config := V06StyleConfig{
 | `legacy.go` | `NormalizeV06Style()`, `DenormalizeV06Style()`, `V06StyleConfig` |
 | `v2.go` | `NormalizeV2()`, `DenormalizeV2()`, `V2Handler` |
 | `v06.go` | `NormalizeV06()`, `DenormalizeV06()`, `V06Handler`, `fundamentalModules` |
-| `mirack.go` | `NormalizeMiRack()`, `DenormalizeMiRack()`, `MiRackHandler`, color palette |
+| `mirack.go` | `NormalizeMiRack()`, `DenormalizeMiRack()`, `MiRackHandler`, module name maps, color palette |
 | `metamodule.go` | `createHubMediumModule()` for --metamodule flag |
 
 ---
@@ -423,45 +422,28 @@ cable["outputModuleId"] = wire["outputModuleId"]  // Still 0, 1, 2, etc.
 
 ---
 
-## MiRack Color Handling
+## MiRack-Specific Conversions
 
-MiRack uses a fixed 6-color palette with integer indices (0-5) instead of hex colors.
+**Color**: MiRack uses a 6-color palette (colorIndex 0-5) instead of hex. Converter maps between colorIndex and nearest hex color.
 
-### Color Palette
+**Module Names**: MiRack uses different module names than VCV Rack V2.
 
-| Index | Color Name | RGB | Hex |
-|-------|-----------|-----|-----|
-| 0 | Yellow | 255, 181, 0 | #ffb500 |
-| 1 | Red | 242, 56, 74 | #f2384a |
-| 2 | Green | 0, 181, 110 | #00b56e |
-| 3 | Teal | 54, 149, 239 | #3695ef |
-| 4 | Orange | 255, 181, 56 | #ffb538 |
-| 5 | Purple | 140, 74, 181 | #8c4ab5 |
+## MiRack Module Name Mappings
 
-### Conversion
+MiRack uses different module names than VCV Rack V2. The converter maps between them during conversion.
 
-Located in `internal/converter/mirack.go`:
+| MiRack Model | V2 Model |
+|--------------|----------|
+| `MIDIBasicInterfaceOut` | `CV-MIDI` |
+| `MIDICCInterface` | `MIDICCToCVInterface` |
+| `MIDICCInterfaceOut` | `CV-CC` |
+| `MIDITriggerInterface` | `MIDITriggerToCVInterface` |
+| `MIDITriggerInterfaceOut` | `CV-Gate` |
+| `PolyMerger` | `Merge` |
+| `PolySplitter` | `Split` |
+| `PolySummer` | `Sum` |
 
-```go
-// Normalize: colorIndex → hex
-func convertMiRackColorIndexToHex(cable map[string]any, issues *[]string) {
-    if colorIndex, ok := cable["colorIndex"]; ok {
-        idx := int(colorIndex.(float64))
-        hexColor := miRackColorIndexToHex(idx)
-        cable["color"] = hexColor
-        delete(cable, "colorIndex")
-    }
-}
-
-// Denormalize: hex → nearest colorIndex
-func convertHexToMiRackColorIndex(wire map[string]any, issues *[]string) {
-    if color, ok := wire["color"].(string); ok {
-        r, g, b, _ := hexToRGB(color)
-        wire["colorIndex"] = rgbToMiRackColorIndex(r, g, b)
-        delete(wire, "color")
-    }
-}
-```
+See `internal/converter/mirack.go`: `miRackToV2ModuleMap` and `v2ToMiRackModuleMap`.
 
 ---
 

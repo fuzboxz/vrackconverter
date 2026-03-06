@@ -1063,3 +1063,802 @@ func TestMiRackNoPluginConversion(t *testing.T) {
 		}
 	})
 }
+
+// TestModuleIDZeroEdgeCase tests that module ID 0 is handled correctly.
+// This is a critical test for the fix where we use hasInputModule flag instead of
+// checking inputModuleID != 0, since 0 is a valid module ID.
+func TestModuleIDZeroEdgeCase(t *testing.T) {
+	t.Run("AudioInterfaceIn with id: 0 is preserved through roundtrip", func(t *testing.T) {
+		// Create a MiRack patch with AudioInterfaceIn having id: 0
+		originalJSON := `{
+			"version": "0.6.2",
+			"modules": [
+				{
+					"id": 0,
+					"plugin": "Core",
+					"model": "AudioInterface",
+					"params": [],
+					"pos": [0, 0]
+				},
+				{
+					"id": 0,
+					"plugin": "Core",
+					"model": "AudioInterfaceIn",
+					"params": [],
+					"pos": [3, 0]
+				},
+				{
+					"id": 1,
+					"plugin": "Core",
+					"model": "VCO",
+					"params": [],
+					"pos": [6, 0]
+				}
+			],
+			"wires": [
+				{
+					"outputModuleId": 1,
+					"outputId": 0,
+					"inputModuleId": 0,
+					"inputId": 0
+				}
+			]
+		}`
+
+		var patch map[string]any
+		if err := json.Unmarshal([]byte(originalJSON), &patch); err != nil {
+			t.Fatalf("Failed to parse JSON: %v", err)
+		}
+
+		// Count original modules (should be 3)
+		originalModules := patch["modules"].([]any)
+		if len(originalModules) != 3 {
+			t.Fatalf("Expected 3 modules initially, got %d", len(originalModules))
+		}
+
+		// MiRack → V2 (normalize)
+		var issues []string
+		if err := NormalizeMiRack(patch, &issues); err != nil {
+			t.Fatalf("NormalizeMiRack failed: %v", err)
+		}
+
+		// After merge, should have 2 modules: AudioInterface2 + VCO
+		normalizedModules := patch["modules"].([]any)
+		if len(normalizedModules) != 2 {
+			t.Errorf("After normalization: expected 2 modules (merged AudioInterface2 + VCO), got %d", len(normalizedModules))
+		}
+
+		// Check that AudioInterface2 exists
+		var audioInterface2 map[string]any
+		for _, m := range normalizedModules {
+			mod := m.(map[string]any)
+			if model, _ := mod["model"].(string); model == "AudioInterface2" {
+				audioInterface2 = mod
+				break
+			}
+		}
+		if audioInterface2 == nil {
+			t.Fatal("AudioInterface2 not found after normalization")
+		}
+
+		// Check that metadata has both output and input module IDs
+		mergedData, ok := audioInterface2["_mergedAudioModule"].(map[string]any)
+		if !ok {
+			t.Fatal("Missing _mergedAudioModule metadata")
+		}
+
+		// Check that inputModuleID key exists (critical for the fix)
+		// Key existence indicates that the input module existed, even if its ID is 0
+		_, hasInputKey := mergedData["inputModuleID"]
+		if !hasInputKey {
+			t.Error("Expected inputModuleID key to exist in metadata (input module was present)")
+		}
+		// Also verify the actual ID value is 0
+		inputID := getInt64FromMap(mergedData, "inputModuleID")
+		if inputID != 0 {
+			t.Errorf("Expected inputModuleID=0, got %d", inputID)
+		}
+
+		// V2 → MiRack (denormalize)
+		if err := DenormalizeMiRack(patch, &issues); err != nil {
+			t.Fatalf("DenormalizeMiRack failed: %v", err)
+		}
+
+		// After roundtrip, should have 3 modules again (split back)
+		finalModules := patch["modules"].([]any)
+		if len(finalModules) != 3 {
+			t.Errorf("After roundtrip: expected 3 modules, got %d", len(finalModules))
+		}
+
+		// Verify AudioInterfaceIn with id: 0 was restored
+		var audioInterfaceIn *map[string]any
+		for _, m := range finalModules {
+			mod := m.(map[string]any)
+			model, _ := mod["model"].(string)
+			if model == "AudioInterfaceIn" {
+				mCopy := mod
+				audioInterfaceIn = &mCopy
+				break
+			}
+		}
+
+		if audioInterfaceIn == nil {
+			t.Fatal("AudioInterfaceIn not found after roundtrip - module ID 0 was lost!")
+		}
+
+		// Verify the restored AudioInterfaceIn has id: 0
+		if id := getInt64FromMap(*audioInterfaceIn, "id"); id != 0 {
+			t.Errorf("AudioInterfaceIn should have id=0, got %d", id)
+		}
+	})
+
+	t.Run("AudioInterface output module with id: 0 works correctly", func(t *testing.T) {
+		// Create a MiRack patch with AudioInterface (output) having id: 0
+		originalJSON := `{
+			"version": "0.6.2",
+			"modules": [
+				{
+					"id": 0,
+					"plugin": "Core",
+					"model": "AudioInterface",
+					"params": [],
+					"pos": [0, 0]
+				},
+				{
+					"id": 5,
+					"plugin": "Core",
+					"model": "AudioInterfaceIn",
+					"params": [],
+					"pos": [3, 0]
+				},
+				{
+					"id": 1,
+					"plugin": "Core",
+					"model": "VCO",
+					"params": [],
+					"pos": [6, 0]
+				}
+			],
+			"wires": [
+				{
+					"outputModuleId": 0,
+					"outputId": 0,
+					"inputModuleId": 2,
+					"inputId": 0
+				}
+			]
+		}`
+
+		var patch map[string]any
+		if err := json.Unmarshal([]byte(originalJSON), &patch); err != nil {
+			t.Fatalf("Failed to parse JSON: %v", err)
+		}
+
+		// MiRack → V2 → MiRack (roundtrip)
+		var issues []string
+		if err := NormalizeMiRack(patch, &issues); err != nil {
+			t.Fatalf("NormalizeMiRack failed: %v", err)
+		}
+		if err := DenormalizeMiRack(patch, &issues); err != nil {
+			t.Fatalf("DenormalizeMiRack failed: %v", err)
+		}
+
+		// Verify AudioInterface with id: 0 was preserved
+		modules := patch["modules"].([]any)
+		var audioInterface *map[string]any
+		for _, m := range modules {
+			mod := m.(map[string]any)
+			model, _ := mod["model"].(string)
+			if model == "AudioInterface" {
+				mCopy := mod
+				audioInterface = &mCopy
+				break
+			}
+		}
+
+		if audioInterface == nil {
+			t.Fatal("AudioInterface not found after roundtrip")
+		}
+
+		if id := getInt64FromMap(*audioInterface, "id"); id != 0 {
+			t.Errorf("AudioInterface should have id=0, got %d", id)
+		}
+	})
+
+	t.Run("AudioInterface with NO input module - key should not exist", func(t *testing.T) {
+		// Create a MiRack patch with AudioInterface but NO AudioInterfaceIn
+		originalJSON := `{
+			"version": "0.6.2",
+			"modules": [
+				{
+					"id": 7,
+					"plugin": "Core",
+					"model": "AudioInterface",
+					"params": [],
+					"pos": [0, 0]
+				},
+				{
+					"id": 1,
+					"plugin": "Core",
+					"model": "VCO",
+					"params": [],
+					"pos": [6, 0]
+				}
+			],
+			"wires": []
+		}`
+
+		var patch map[string]any
+		if err := json.Unmarshal([]byte(originalJSON), &patch); err != nil {
+			t.Fatalf("Failed to parse JSON: %v", err)
+		}
+
+		// MiRack → V2 (normalize)
+		var issues []string
+		if err := NormalizeMiRack(patch, &issues); err != nil {
+			t.Fatalf("NormalizeMiRack failed: %v", err)
+		}
+
+		// Find the merged AudioInterface2 module
+		normalizedModules := patch["modules"].([]any)
+		var audioInterface2 map[string]any
+		for _, m := range normalizedModules {
+			mod := m.(map[string]any)
+			if model, _ := mod["model"].(string); model == "AudioInterface2" {
+				audioInterface2 = mod
+				break
+			}
+		}
+
+		if audioInterface2 == nil {
+			t.Fatal("AudioInterface2 not found after normalization")
+		}
+
+		// Check that inputModuleID key does NOT exist (no input module was present)
+		mergedData, ok := audioInterface2["_mergedAudioModule"].(map[string]any)
+		if !ok {
+			t.Fatal("Missing _mergedAudioModule metadata")
+		}
+
+		_, hasInputKey := mergedData["inputModuleID"]
+		if hasInputKey {
+			t.Error("Expected inputModuleID key to NOT exist in metadata (no input module was present)")
+		}
+
+		// V2 → MiRack (denormalize)
+		if err := DenormalizeMiRack(patch, &issues); err != nil {
+			t.Fatalf("DenormalizeMiRack failed: %v", err)
+		}
+
+		// After roundtrip, should have 2 modules (no AudioInterfaceIn created)
+		finalModules := patch["modules"].([]any)
+		if len(finalModules) != 2 {
+			t.Errorf("After roundtrip: expected 2 modules, got %d", len(finalModules))
+		}
+
+		// Verify NO AudioInterfaceIn was created
+		for _, m := range finalModules {
+			mod := m.(map[string]any)
+			model, _ := mod["model"].(string)
+			if model == "AudioInterfaceIn" {
+				t.Error("AudioInterfaceIn should not have been created (no input module in original)")
+			}
+		}
+	})
+}
+
+// TestMiRackModuleMapping tests MiRack → V2 module name mappings.
+func TestMiRackModuleMapping(t *testing.T) {
+	t.Run("normalize: maps MiRack module names to V2", func(t *testing.T) {
+		// MiRack uses different module names than VCV Rack V2
+		mirackJSON := `{
+			"version": "0.6.2",
+			"modules": [
+				{"id": 1, "plugin": "Core", "model": "MIDIBasicInterfaceOut", "params": []},
+				{"id": 2, "plugin": "Core", "model": "MIDICCInterface", "params": []},
+				{"id": 3, "plugin": "Core", "model": "MIDICCInterfaceOut", "params": []},
+				{"id": 4, "plugin": "Core", "model": "MIDITriggerInterface", "params": []},
+				{"id": 5, "plugin": "Core", "model": "MIDITriggerInterfaceOut", "params": []},
+				{"id": 6, "plugin": "Core", "model": "PolyMerger", "params": []},
+				{"id": 7, "plugin": "Core", "model": "PolySplitter", "params": []},
+				{"id": 8, "plugin": "Core", "model": "PolySummer", "params": []},
+				{"id": 9, "plugin": "Core", "model": "MIDIToCVInterface", "params": []}
+			],
+			"wires": []
+		}`
+
+		var patch map[string]any
+		if err := json.Unmarshal([]byte(mirackJSON), &patch); err != nil {
+			t.Fatalf("Failed to parse JSON: %v", err)
+		}
+
+		var issues []string
+		if err := NormalizeMiRack(patch, &issues); err != nil {
+			t.Fatalf("NormalizeMiRack failed: %v", err)
+		}
+
+		modules := patch["modules"].([]any)
+
+		// Expected mappings for each module index
+		expectedModels := []string{
+			"CV-MIDI",                  // MIDIBasicInterfaceOut
+			"MIDICCToCVInterface",      // MIDICCInterface
+			"CV-CC",                    // MIDICCInterfaceOut
+			"MIDITriggerToCVInterface", // MIDITriggerInterface
+			"CV-Gate",                  // MIDITriggerInterfaceOut
+			"Merge",                    // PolyMerger
+			"Split",                    // PolySplitter
+			"Sum",                      // PolySummer
+			"MIDIToCVInterface",        // MIDIToCVInterface (no change)
+		}
+
+		for i, m := range modules {
+			mod := m.(map[string]any)
+			model, _ := mod["model"].(string)
+			if model != expectedModels[i] {
+				t.Errorf("Module[%d]: expected model '%s', got '%s'", i, expectedModels[i], model)
+			}
+		}
+
+	})
+
+	t.Run("denormalize: maps V2 module names back to MiRack", func(t *testing.T) {
+		// V2 format with mapped module names
+		v2JSON := `{
+			"version": "2.6.6",
+			"modules": [
+				{"id": 1, "plugin": "Core", "model": "CV-MIDI", "params": []},
+				{"id": 2, "plugin": "Core", "model": "MIDICCToCVInterface", "params": []},
+				{"id": 3, "plugin": "Core", "model": "CV-CC", "params": []},
+				{"id": 4, "plugin": "Core", "model": "MIDITriggerToCVInterface", "params": []},
+				{"id": 5, "plugin": "Core", "model": "CV-Gate", "params": []},
+				{"id": 6, "plugin": "Core", "model": "Merge", "params": []},
+				{"id": 7, "plugin": "Core", "model": "Split", "params": []},
+				{"id": 8, "plugin": "Core", "model": "Sum", "params": []},
+				{"id": 9, "plugin": "Core", "model": "MIDIToCVInterface", "params": []}
+			],
+			"cables": []
+		}`
+
+		var patch map[string]any
+		if err := json.Unmarshal([]byte(v2JSON), &patch); err != nil {
+			t.Fatalf("Failed to parse JSON: %v", err)
+		}
+
+		// Normalize first to build ID-to-index mapping
+		var issues []string
+		if err := NormalizeV2(patch, &issues); err != nil {
+			t.Fatalf("NormalizeV2 failed: %v", err)
+		}
+
+		// Denormalize to MiRack format
+		issues = nil
+		if err := DenormalizeMiRack(patch, &issues); err != nil {
+			t.Fatalf("DenormalizeMiRack failed: %v", err)
+		}
+
+		modules := patch["modules"].([]any)
+
+		// Expected reverse mappings for each module index
+		expectedModels := []string{
+			"MIDIBasicInterfaceOut",   // CV-MIDI
+			"MIDICCInterface",         // MIDICCToCVInterface
+			"MIDICCInterfaceOut",      // CV-CC
+			"MIDITriggerInterface",    // MIDITriggerToCVInterface
+			"MIDITriggerInterfaceOut", // CV-Gate
+			"PolyMerger",              // Merge
+			"PolySplitter",            // Split
+			"PolySummer",              // Sum
+			"MIDIToCVInterface",       // MIDIToCVInterface (no change)
+		}
+
+		for i, m := range modules {
+			mod := m.(map[string]any)
+			model, _ := mod["model"].(string)
+			if model != expectedModels[i] {
+				t.Errorf("Module[%d]: expected model '%s', got '%s'", i, expectedModels[i], model)
+			}
+		}
+	})
+
+	t.Run("roundtrip: MiRack → V2 → MiRack preserves module names", func(t *testing.T) {
+		originalJSON := `{
+			"version": "0.6.2",
+			"modules": [
+				{"id": 1, "plugin": "Core", "model": "MIDIBasicInterfaceOut", "params": []},
+				{"id": 2, "plugin": "Core", "model": "PolyMerger", "params": []}
+			],
+			"wires": []
+		}`
+
+		var patch map[string]any
+		if err := json.Unmarshal([]byte(originalJSON), &patch); err != nil {
+			t.Fatalf("Failed to parse JSON: %v", err)
+		}
+
+		// MiRack → V2 (normalize)
+		var issues []string
+		if err := NormalizeMiRack(patch, &issues); err != nil {
+			t.Fatalf("NormalizeMiRack failed: %v", err)
+		}
+
+		// V2 → MiRack (denormalize)
+		if err := DenormalizeMiRack(patch, &issues); err != nil {
+			t.Fatalf("DenormalizeMiRack failed: %v", err)
+		}
+
+		modules := patch["modules"].([]any)
+
+		// After roundtrip, module names should be back to original MiRack names
+		expectedModels := []string{"MIDIBasicInterfaceOut", "PolyMerger"}
+		for i, m := range modules {
+			mod := m.(map[string]any)
+			model, _ := mod["model"].(string)
+			if model != expectedModels[i] {
+				t.Errorf("Module[%d]: roundtrip failed, expected '%s', got '%s'", i, expectedModels[i], model)
+			}
+		}
+	})
+}
+
+// TestAudioModuleMergeSplit tests audio module merging and splitting.
+func TestAudioModuleMergeSplit(t *testing.T) {
+	t.Run("merges separate AudioInterface and AudioInterfaceIn into AudioInterface2", func(t *testing.T) {
+		mirackJSON := `{
+			"version": "0.6.2",
+			"modules": [
+				{"id": 1, "plugin": "Core", "model": "AudioInterface", "params": []},
+				{"id": 2, "plugin": "Core", "model": "AudioInterfaceIn", "params": []}
+			],
+			"wires": []
+		}`
+
+		var patch map[string]any
+		if err := json.Unmarshal([]byte(mirackJSON), &patch); err != nil {
+			t.Fatalf("Failed to parse JSON: %v", err)
+		}
+
+		var issues []string
+		if err := NormalizeMiRack(patch, &issues); err != nil {
+			t.Fatalf("NormalizeMiRack failed: %v", err)
+		}
+
+		modules := patch["modules"].([]any)
+
+		// Should have 1 module (merged from 2)
+		if len(modules) != 1 {
+			t.Errorf("Expected 1 module after merge, got %d", len(modules))
+		}
+
+		// Check the merged module
+		mod := modules[0].(map[string]any)
+		model, _ := mod["model"].(string)
+		if model != "AudioInterface2" {
+			t.Errorf("Expected model 'AudioInterface2', got '%s'", model)
+		}
+
+		// Check that roundtrip metadata is stored
+		if _, hasMerged := mod["_mergedAudioModule"]; !hasMerged {
+			t.Error("Expected _mergedAudioModule metadata to be stored")
+		}
+	})
+
+	t.Run("splits AudioInterface2 back into separate modules on roundtrip", func(t *testing.T) {
+		mirackJSON := `{
+			"version": "0.6.2",
+			"modules": [
+				{"id": 10, "plugin": "Core", "model": "AudioInterface", "params": [], "pos": [5, 0]},
+				{"id": 20, "plugin": "Core", "model": "AudioInterfaceIn", "params": [], "pos": [8, 0]}
+			],
+			"wires": []
+		}`
+
+		var patch map[string]any
+		if err := json.Unmarshal([]byte(mirackJSON), &patch); err != nil {
+			t.Fatalf("Failed to parse JSON: %v", err)
+		}
+
+		// Normalize: MiRack → V2
+		var issues []string
+		if err := NormalizeMiRack(patch, &issues); err != nil {
+			t.Fatalf("NormalizeMiRack failed: %v", err)
+		}
+
+		// Denormalize: V2 → MiRack
+		if err := DenormalizeMiRack(patch, &issues); err != nil {
+			t.Fatalf("DenormalizeMiRack failed: %v", err)
+		}
+
+		modules := patch["modules"].([]any)
+
+		// Should have 2 modules after split
+		if len(modules) != 2 {
+			t.Errorf("Expected 2 modules after split, got %d", len(modules))
+		}
+
+		// Check the output module
+		outputMod := modules[0].(map[string]any)
+		model, _ := outputMod["model"].(string)
+		if model != "AudioInterface" {
+			t.Errorf("Expected output model 'AudioInterface', got '%s'", model)
+		}
+		if id := getInt64FromMap(outputMod, "id"); id != 10 {
+			t.Errorf("Expected output module ID 10, got %d", id)
+		}
+
+		// Check the input module
+		inputMod := modules[1].(map[string]any)
+		model, _ = inputMod["model"].(string)
+		if model != "AudioInterfaceIn" {
+			t.Errorf("Expected input model 'AudioInterfaceIn', got '%s'", model)
+		}
+		if id := getInt64FromMap(inputMod, "id"); id != 20 {
+			t.Errorf("Expected input module ID 20, got %d", id)
+		}
+
+		// Check that metadata was cleaned up
+		if _, hasMerged := outputMod["_mergedAudioModule"]; hasMerged {
+			t.Error("_mergedAudioModule metadata should be removed after roundtrip")
+		}
+	})
+
+	t.Run("handles AudioInterface8 and AudioInterfaceIn8", func(t *testing.T) {
+		mirackJSON := `{
+			"version": "0.6.2",
+			"modules": [
+				{"id": 1, "plugin": "Core", "model": "AudioInterface8", "params": []},
+				{"id": 2, "plugin": "Core", "model": "AudioInterfaceIn8", "params": []}
+			],
+			"wires": []
+		}`
+
+		var patch map[string]any
+		if err := json.Unmarshal([]byte(mirackJSON), &patch); err != nil {
+			t.Fatalf("Failed to parse JSON: %v", err)
+		}
+
+		var issues []string
+		if err := NormalizeMiRack(patch, &issues); err != nil {
+			t.Fatalf("NormalizeMiRack failed: %v", err)
+		}
+
+		modules := patch["modules"].([]any)
+		mod := modules[0].(map[string]any)
+		model, _ := mod["model"].(string)
+
+		if model != "AudioInterface8" {
+			t.Errorf("Expected model 'AudioInterface8', got '%s'", model)
+		}
+	})
+
+	t.Run("handles AudioInterface16 and AudioInterfaceIn16", func(t *testing.T) {
+		mirackJSON := `{
+			"version": "0.6.2",
+			"modules": [
+				{"id": 1, "plugin": "Core", "model": "AudioInterface16", "params": []},
+				{"id": 2, "plugin": "Core", "model": "AudioInterfaceIn16", "params": []}
+			],
+			"wires": []
+		}`
+
+		var patch map[string]any
+		if err := json.Unmarshal([]byte(mirackJSON), &patch); err != nil {
+			t.Fatalf("Failed to parse JSON: %v", err)
+		}
+
+		var issues []string
+		if err := NormalizeMiRack(patch, &issues); err != nil {
+			t.Fatalf("NormalizeMiRack failed: %v", err)
+		}
+
+		modules := patch["modules"].([]any)
+		mod := modules[0].(map[string]any)
+		model, _ := mod["model"].(string)
+
+		if model != "AudioInterface16" {
+			t.Errorf("Expected model 'AudioInterface16', got '%s'", model)
+		}
+	})
+}
+
+// TestValidateAudioModuleCount tests MiRack audio module validation.
+func TestValidateAudioModuleCount(t *testing.T) {
+	t.Run("valid: single audio interface", func(t *testing.T) {
+		modules := []any{
+			map[string]any{"model": "AudioInterface"},
+			map[string]any{"model": "VCO"},
+		}
+		valid, _ := validateAudioModuleCount(modules)
+		if !valid {
+			t.Error("Expected valid for single audio module")
+		}
+	})
+
+	t.Run("valid: paired input/output", func(t *testing.T) {
+		modules := []any{
+			map[string]any{"model": "AudioInterface"},
+			map[string]any{"model": "AudioInterfaceIn"},
+		}
+		valid, _ := validateAudioModuleCount(modules)
+		if !valid {
+			t.Error("Expected valid for paired audio modules")
+		}
+	})
+
+	t.Run("valid: no audio modules", func(t *testing.T) {
+		modules := []any{
+			map[string]any{"model": "VCO"},
+			map[string]any{"model": "VCA"},
+		}
+		valid, _ := validateAudioModuleCount(modules)
+		if !valid {
+			t.Error("Expected valid for no audio modules")
+		}
+	})
+
+	t.Run("valid: V2 audio modules are recognized", func(t *testing.T) {
+		modules := []any{
+			map[string]any{"model": "AudioInterface2"},
+			map[string]any{"model": "AudioInterface8"},
+		}
+		valid, reason := validateAudioModuleCount(modules)
+		if valid {
+			t.Error("Expected invalid for multiple V2 output modules")
+		}
+		if reason == "" {
+			t.Error("Expected skip reason for multiple output modules")
+		}
+	})
+
+	t.Run("invalid: multiple output modules", func(t *testing.T) {
+		modules := []any{
+			map[string]any{"model": "AudioInterface"},
+			map[string]any{"model": "AudioInterface8"},
+		}
+		valid, reason := validateAudioModuleCount(modules)
+		if valid {
+			t.Error("Expected invalid for multiple output modules")
+		}
+		if reason == "" {
+			t.Error("Expected skip reason")
+		}
+		if !strings.Contains(reason, "2 audio output modules") {
+			t.Errorf("Expected reason to mention 2 output modules, got: %s", reason)
+		}
+	})
+
+	t.Run("invalid: multiple input modules", func(t *testing.T) {
+		modules := []any{
+			map[string]any{"model": "AudioInterfaceIn"},
+			map[string]any{"model": "AudioInterfaceIn8"},
+		}
+		valid, reason := validateAudioModuleCount(modules)
+		if valid {
+			t.Error("Expected invalid for multiple input modules")
+		}
+		if reason == "" {
+			t.Error("Expected skip reason")
+		}
+		if !strings.Contains(reason, "2 audio input modules") {
+			t.Errorf("Expected reason to mention 2 input modules, got: %s", reason)
+		}
+	})
+
+	t.Run("invalid: three output modules", func(t *testing.T) {
+		modules := []any{
+			map[string]any{"model": "AudioInterface"},
+			map[string]any{"model": "AudioInterface8"},
+			map[string]any{"model": "AudioInterface16"},
+		}
+		valid, reason := validateAudioModuleCount(modules)
+		if valid {
+			t.Error("Expected invalid for 3 output modules")
+		}
+		if !strings.Contains(reason, "3 audio output modules") {
+			t.Errorf("Expected reason to mention 3 output modules, got: %s", reason)
+		}
+	})
+
+	t.Run("invalid: mixed types exceed limit", func(t *testing.T) {
+		modules := []any{
+			map[string]any{"model": "AudioInterface"},
+			map[string]any{"model": "AudioInterface8"},
+			map[string]any{"model": "AudioInterfaceIn"},
+		}
+		valid, _ := validateAudioModuleCount(modules)
+		if valid {
+			t.Error("Expected invalid for 2 outputs + 1 input")
+		}
+	})
+
+	t.Run("handles non-map modules gracefully", func(t *testing.T) {
+		modules := []any{
+			map[string]any{"model": "AudioInterface"},
+			"not a map",
+			nil,
+		}
+		valid, _ := validateAudioModuleCount(modules)
+		if !valid {
+			t.Error("Expected valid when only one audio module exists (with non-map items)")
+		}
+	})
+}
+
+// TestMiRackMultipleAudioModules_Skipped tests that patches with multiple
+// audio modules are skipped during conversion.
+func TestMiRackMultipleAudioModules_Skipped(t *testing.T) {
+	t.Run("MiRack to V2 with multiple outputs is skipped", func(t *testing.T) {
+		// Create a MiRack patch with 2 AudioInterface modules (invalid for MiRack)
+		patchJSON := `{
+			"version": "0.6.2",
+			"modules": [
+				{"id": 0, "plugin": "Core", "model": "AudioInterface", "params": [], "pos": [0, 0]},
+				{"id": 1, "plugin": "Core", "model": "AudioInterface8", "params": [], "pos": [3, 0]}
+			],
+			"wires": []
+		}`
+
+		var patch map[string]any
+		if err := json.Unmarshal([]byte(patchJSON), &patch); err != nil {
+			t.Fatalf("Failed to parse JSON: %v", err)
+		}
+
+		// Validate should fail
+		modules := patch["modules"].([]any)
+		valid, reason := validateAudioModuleCount(modules)
+		if valid {
+			t.Error("Expected validation to fail for multiple output modules")
+		}
+		if reason == "" {
+			t.Error("Expected skip reason")
+		}
+	})
+
+	t.Run("V2 to MiRack with multiple AudioInterface2 is skipped", func(t *testing.T) {
+		// Create a V2 patch with 2 AudioInterface2 modules (invalid for MiRack)
+		patchJSON := `{
+			"version": "2.6.6",
+			"modules": [
+				{"id": 0, "plugin": "Core", "model": "AudioInterface2", "params": [], "pos": [0, 0]},
+				{"id": 1, "plugin": "Core", "model": "AudioInterface2", "params": [], "pos": [3, 0]}
+			],
+			"cables": []
+		}`
+
+		var patch map[string]any
+		if err := json.Unmarshal([]byte(patchJSON), &patch); err != nil {
+			t.Fatalf("Failed to parse JSON: %v", err)
+		}
+
+		// Validate should fail
+		modules := patch["modules"].([]any)
+		valid, reason := validateAudioModuleCount(modules)
+		if valid {
+			t.Error("Expected validation to fail for multiple output modules")
+		}
+		if !strings.Contains(reason, "2 audio output modules") {
+			t.Errorf("Expected reason about 2 output modules, got: %s", reason)
+		}
+	})
+
+	t.Run("valid single AudioInterface2 passes validation", func(t *testing.T) {
+		patchJSON := `{
+			"version": "2.6.6",
+			"modules": [
+				{"id": 0, "plugin": "Core", "model": "AudioInterface2", "params": [], "pos": [0, 0]}
+			],
+			"cables": []
+		}`
+
+		var patch map[string]any
+		if err := json.Unmarshal([]byte(patchJSON), &patch); err != nil {
+			t.Fatalf("Failed to parse JSON: %v", err)
+		}
+
+		modules := patch["modules"].([]any)
+		valid, reason := validateAudioModuleCount(modules)
+		if !valid {
+			t.Errorf("Expected validation to pass, got reason: %s", reason)
+		}
+	})
+}

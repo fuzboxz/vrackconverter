@@ -314,9 +314,11 @@ func DenormalizeV06Style(patch map[string]any, config V06StyleConfig, issues *[]
 
 					// Special handling for MiRack: Fundamental → Core
 					// MiRack doesn't have a Fundamental plugin, so all Fundamental modules must be Core
+					// This is expected behavior, not a warning.
 					if !config.HasFundamental && plugin == "Fundamental" {
 						newPlugin = "Core"
 						modified = true
+						// Don't log - this is expected for MiRack format
 					} else {
 						newPlugin, modified = config.DenormalizePlugin(plugin, model)
 					}
@@ -324,7 +326,10 @@ func DenormalizeV06Style(patch map[string]any, config V06StyleConfig, issues *[]
 					if modified {
 						oldPlugin := plugin
 						mod["plugin"] = newPlugin
-						*issues = append(*issues, fmt.Sprintf("%s denormalization: module[%d]: %s/%s → %s/%s", config.FormatName, i, oldPlugin, model, newPlugin, model))
+						// Only log if this is not the automatic MiRack Fundamental → Core conversion
+						if !(!config.HasFundamental && oldPlugin == "Fundamental") {
+							*issues = append(*issues, fmt.Sprintf("%s denormalization: module[%d]: %s/%s → %s/%s", config.FormatName, i, oldPlugin, model, newPlugin, model))
+						}
 					}
 				}
 			}

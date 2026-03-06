@@ -51,11 +51,11 @@ build-all:
 	cd $(BUILD_DIR) && zip -q vrackconverter-windows-arm64.zip vrackconverter-windows-arm64.exe
 	@echo "All builds complete in $(BUILD_DIR)/"
 
-# Run tests
+# Run tests (shows only failed tests by default)
 .PHONY: test
 test:
 	@echo "Running tests..."
-	$(GOTEST) -v -race ./...
+	$(GOTEST) -race ./...
 	@echo "Tests passed"
 
 # Format code
@@ -114,7 +114,7 @@ help:
 	@echo "  all           Run fmt, vet, test, and build (default)"
 	@echo "  build         Build for current platform"
 	@echo "  build-all     Build for all platforms (linux, darwin, windows)"
-	@echo "  test          Run tests with verbose output"
+	@echo "  test          Run tests (shows only failures)"
 	@echo "  fmt           Format Go code"
 	@echo "  vet           Run go vet"
 	@echo "  install       Install to $$GOPATH/bin or /usr/local/bin"
