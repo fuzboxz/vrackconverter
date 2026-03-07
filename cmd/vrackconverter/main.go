@@ -27,6 +27,7 @@ func init() {
 	flag.BoolVar(&showVersion, "version", false, "Show version")
 	flag.StringVar(&outputPath, "o", "", "Output file/directory")
 	flag.StringVar(&outputPath, "output", "", "Output file/directory")
+	flag.StringVar(&outputFormat, "f", "", "Output format: v2, v06, or mirack (overrides file extension)")
 	flag.StringVar(&outputFormat, "format", "", "Output format: v2, v06, or mirack (overrides file extension)")
 	flag.BoolVar(&overwrite, "overwrite", false, "Overwrite input file in place")
 	flag.BoolVar(&quiet, "q", false, "Suppress non-error output")
@@ -51,7 +52,7 @@ Arguments:
 
 Flags:
   -o, --output <path>    Output file/directory (if not specified, requires --overwrite)
-      --format <fmt>     Output format: v2, v06, or mirack (overrides file extension)
+  -f, --format <fmt>     Output format: v2, v06, or mirack (overrides file extension)
       --overwrite        Overwrite input file in place
   -m, --metamodule       Add 4ms MetaModule (HubMedium) to patch
   -q, --quiet            Suppress non-error output

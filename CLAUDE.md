@@ -133,17 +133,118 @@ for i, m := range modules {
 }
 ```
 
-### Testing
+### Testing Architecture
 
-- Test files: `*_test.go` in the same package
-- Test function names: `Test<FunctionName>_<Scenario>`
-- Use `t.Run()` for subtests with different cases
+The test suite uses a two-tier architecture: **E2E tests** for integration coverage and **unit tests** for specific logic validation.
 
+#### E2E Tests (`e2e_test.go`, `e2e_helpers.go`)
+
+**Purpose**: Validate the complete conversion pipeline using real fixture files.
+
+**Structure**:
+- `e2e_test.go` - Test execution and matrix definitions
+- `e2e_helpers.go` - Shared validation helpers and fixture data structures
+
+**Key E2E Tests**:
+| Test | Purpose |
+|------|---------|
+| `TestE2E_AllConversions` | Runs all format conversions from the conversion matrix |
+| `TestE2E_RoundtripTests` | Tests A → B → A conversions for semantic preservation |
+| `TestE2E_FormatDetection` | Verifies all fixtures are correctly detected |
+| `TestE2E_MetaModuleFlag` | Validates `--metamodule` flag adds HubMedium module |
+
+**Universal Validators** (called for every conversion):
+- `validateFormat()` - Output has correct format structure
+- `validateConnectivity()` - All cable/wire references are valid
+- `validateStructuralIntegrity()` - JSON is well-formed
+- `validateColorPreservation()` - Cable colors preserved (with palette tolerance)
+- `validateParameterEquivalence()` - Parameter values preserved
+- `validateDataPreservation()` - No data lost during conversion
+- `validateNotesModuleTransformation()` - Notes module text field conversion
+
+**Fixtures**: Located in `test/` directory:
+- MiRack: `mirack_basic.mrk`, `mirack_cables.mrk`, `mirack_multichannel.mrk`
+- V0.6: `vcv06_cables.vcv`, `legacy-patch.vcv`
+- V2: `basevcvrack2.vcv`, `vcv2_cables.vcv`, `vcv2_audioio.vcv`
+
+**When to add E2E tests**:
+- Adding a new format conversion
+- Modifying the conversion pipeline
+- Adding flags that affect output (e.g., `--metamodule`)
+- Fixing bugs that affect patch structure
+
+#### Unit Tests (`*_test.go` co-located with source)
+
+**Purpose**: Test individual functions and internal logic in isolation.
+
+**Test Files**:
+| File | Tests |
+|------|-------|
+| `v2_test.go` | V2 format detection, validation |
+| `vcvv06_test.go` | V0.6 normalize/denormalize (cable indices, plugin mapping) |
+| `mirack_test.go` | MiRack module name mappings, color conversion |
+| `notes_test.go` | Notes module text field transformation |
+| `error_test.go` | Error handling for malformed inputs |
+| `converter_test.go` | Format detection logic |
+
+**Unit Test Pattern**:
 ```go
-func TestNormalizeV06_WithIDs(t *testing.T) {
-    t.Run("preserves existing module IDs", func(t *testing.T) { ... })
-    t.Run("assigns sequential IDs when missing", func(t *testing.T) { ... })
+func TestFunctionName_Scenario(t *testing.T) {
+    t.Run("specific case", func(t *testing.T) {
+        // Arrange: set up test data
+        input := ...
+
+        // Act: call function under test
+        result := FunctionName(input)
+
+        // Assert: verify expected outcome
+        if result != expected {
+            t.Errorf("got %v, want %v", result, expected)
+        }
+    })
 }
+```
+
+#### Test Coverage Requirements
+
+**New functions MUST have test coverage** when:
+
+1. **Format conversion logic** - Any function that transforms patch data
+   - Add unit tests for edge cases (empty data, missing fields)
+   - Add E2E test for integration
+
+2. **Format detection** - Changes to how formats are identified
+   - Unit tests for detection function
+   - Update `TestE2E_FormatDetection` with new fixture
+
+3. **Module-specific handling** - Special cases for specific modules
+   - Unit test for the module transformation
+   - Include in fixture for E2E validation
+
+4. **Flags/options** - New CLI features
+   - E2E test validates flag behavior
+   - Unit tests for option parsing logic
+
+5. **Error conditions** - Invalid input handling
+   - Add to `error_test.go`
+
+**Exempt from coverage requirements**:
+- Trivial getters/setters
+- Generated code
+- Debug/logging functions
+
+#### Running Tests
+
+```bash
+# All tests
+make test
+
+# Specific test suite
+go test -v ./internal/converter -run TestE2E
+go test -v ./internal/converter -run TestNotesModule
+
+# Coverage report
+go test -cover ./internal/converter/...
 ```
 
 ### Project-Specific Rules
@@ -184,7 +285,16 @@ vrackconverter/
 │       ├── v06.go           # V0.6 format handler (uses legacy baseline + Fundamental plugin)
 │       ├── mirack.go        # MiRack format handler (module name mappings, color conversion)
 │       ├── *_test.go        # Unit tests (co-located with source files)
-│       └── mirack_cables_test.go  # Fixture-based test for test/mirack_cables.mrk
+│       ├── e2e_test.go      # E2E test execution and matrix definitions
+│       ├── e2e_helpers.go   # Shared E2E validation helpers
+│       ├── v2_test.go       # V2 format unit tests
+│       ├── vcvv06_test.go   # V0.6 format unit tests
+│       ├── notes_test.go    # Notes module transformation unit tests
+│       └── error_test.go    # Error handling unit tests
+├── test/
+│   ├── *.mrk                # MiRack test fixtures
+│   ├── *.vcv                # V0.6/V2 test fixtures
+│   └── temp/                # Temporary test output directory
 └── Makefile
 ```
 
@@ -308,7 +418,12 @@ Implemented in `detectRequiredChannelCount()`, `splitAudioModulesNative()`, and 
 | `v06.go` | `NormalizeV06()`, `DenormalizeV06()`, `V06Handler`, `DetectV06Format()` |
 | `mirack.go` | `NormalizeMiRack()`, `DenormalizeMiRack()`, `MiRackHandler`, `DetectMiRackFormat()`, module name maps, color palette |
 | `metamodule.go` | `createHubMediumModule()` for --metamodule flag |
-| `converter_test.go` | Format detection tests |
+| `e2e_test.go` | E2E test execution, conversion matrix, roundtrip tests |
+| `e2e_helpers.go` | E2E validation helpers (format, connectivity, colors, parameters, data) |
+| `vcvv06_test.go` | V0.6 unit tests (normalize/denormalize, plugin mapping) |
+| `notes_test.go` | Notes module text field transformation tests |
+| `error_test.go` | Error handling tests (invalid inputs, file errors) |
+| `converter_test.go` | Format detection unit tests |
 
 ---
 
