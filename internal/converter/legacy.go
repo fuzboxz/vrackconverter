@@ -309,6 +309,8 @@ func DenormalizeV06Style(patch map[string]any, config V06StyleConfig, issues *[]
 		if plugin, ok := mod["plugin"].(string); ok {
 			if model, hasModel := mod["model"].(string); hasModel {
 				if config.DenormalizePlugin != nil {
+					// newPlugin will be reassigned below when modified=true; the initial value
+					// is only used when no change is needed (i.e., DenormalizePlugin returns unchanged)
 					newPlugin := plugin
 					modified := false
 
