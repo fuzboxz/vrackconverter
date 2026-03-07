@@ -12,7 +12,7 @@ func TestMirackCablesFixture(t *testing.T) {
 		handler := &MiRackHandler{}
 
 		// Read the test fixture
-		data, err := handler.Read("/Users/fuzboxz/vrackconverter/test/mirack_cables.mrk")
+		data, err := handler.Read("../../test/mirack_cables.mrk")
 		if err != nil {
 			t.Fatalf("Failed to read mirack_cables.mrk: %v", err)
 		}

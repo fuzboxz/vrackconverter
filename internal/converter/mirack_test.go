@@ -14,7 +14,7 @@ func TestMiRackHandler_Read(t *testing.T) {
 		handler := &MiRackHandler{}
 
 		// Use the test fixture .mrk bundle
-		data, err := handler.Read("/Users/fuzboxz/vrackconverter/test/mirackoutput.mrk")
+		data, err := handler.Read("../../test/mirackoutput.mrk")
 		if err != nil {
 			t.Fatalf("Failed to read .mrk bundle: %v", err)
 		}
@@ -40,7 +40,7 @@ func TestMiRackHandler_Read(t *testing.T) {
 		handler := &MiRackHandler{}
 
 		// Read the patch.vcv file directly
-		data, err := handler.Read("/Users/fuzboxz/vrackconverter/test/mirackoutput.mrk/patch.vcv")
+		data, err := handler.Read("../../test/mirackoutput.mrk/patch.vcv")
 		if err != nil {
 			t.Fatalf("Failed to read patch.vcv: %v", err)
 		}

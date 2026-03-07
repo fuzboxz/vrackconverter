@@ -12,7 +12,7 @@ func TestMirackBasicFixture(t *testing.T) {
 		handler := &MiRackHandler{}
 
 		// Read the test fixture
-		data, err := handler.Read("/Users/fuzboxz/vrackconverter/test/mirack_basic.mrk")
+		data, err := handler.Read("../../test/mirack_basic.mrk")
 		if err != nil {
 			t.Fatalf("Failed to read mirack_basic.mrk: %v", err)
 		}
@@ -125,7 +125,7 @@ func TestMirackBasicFixture(t *testing.T) {
 	t.Run("MIDI modules stay in Core plugin", func(t *testing.T) {
 		handler := &MiRackHandler{}
 
-		data, err := handler.Read("/Users/fuzboxz/vrackconverter/test/mirack_basic.mrk")
+		data, err := handler.Read("../../test/mirack_basic.mrk")
 		if err != nil {
 			t.Fatalf("Failed to read mirack_basic.mrk: %v", err)
 		}
