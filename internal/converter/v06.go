@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 )
 
 // V06Handler implements FormatHandler for VCV Rack v0.6 format.
@@ -70,7 +72,13 @@ func NormalizeV06(patch map[string]any, issues *[]string) error {
 		NormalizePlugin:   normalizeV06Plugin,
 		DenormalizePlugin: denormalizeV06Plugin,
 	}
-	return NormalizeV06Style(patch, config, issues)
+	if err := NormalizeV06Style(patch, config, issues); err != nil {
+		return err
+	}
+
+	// AudioInterface model name is compatible with V2 (no change needed)
+	normalizeV06AudioModules(patch, issues)
+	return nil
 }
 
 // normalizeV06Plugin converts Fundamental → Core for v0.6 → v2 conversion.
@@ -107,4 +115,36 @@ func DenormalizeV06(patch map[string]any, issues *[]string) error {
 		DenormalizePlugin: denormalizeV06Plugin,
 	}
 	return DenormalizeV06Style(patch, config, issues)
+}
+
+// normalizeV06AudioModules keeps AudioInterface as-is.
+// V0.6 AudioInterface is compatible with V2's plain AudioInterface model.
+func normalizeV06AudioModules(patch map[string]any, issues *[]string) {
+	// No change needed - AudioInterface model name is the same in both formats
+	// The plugin conversion (Fundamental/Core → Core) is handled elsewhere
+}
+
+// DetectV06Format checks if the given path represents a VCV Rack v0.6 patch.
+// A v0.6 patch is identified by:
+// 1. The path has .vcv extension, AND
+// 2. The file is NOT a MiRack bundle, AND
+// 3. The file contains plain JSON with version "0.x.x" or is a zstd archive with version "0.x.x"
+func DetectV06Format(path string, data []byte) bool {
+	// Must be .vcv file
+	if strings.ToLower(filepath.Ext(path)) != ".vcv" {
+		return false
+	}
+
+	// Not inside .mrk bundle (MiRack takes precedence)
+	parentDir := filepath.Dir(path)
+	if strings.ToLower(filepath.Ext(parentDir)) == ".mrk" {
+		return false
+	}
+
+	// Check version field - v0.6 has version "0.x.x"
+	version, err := extractVersion(data)
+	if err != nil {
+		return false
+	}
+	return strings.HasPrefix(version, "0.")
 }

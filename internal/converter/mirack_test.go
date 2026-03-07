@@ -1626,8 +1626,8 @@ func TestAudioModuleMergeSplit(t *testing.T) {
 		mod := modules[0].(map[string]any)
 		model, _ := mod["model"].(string)
 
-		if model != "AudioInterface8" {
-			t.Errorf("Expected model 'AudioInterface8', got '%s'", model)
+		if model != "AudioInterface" {
+			t.Errorf("Expected model 'AudioInterface' (8-channel), got '%s'", model)
 		}
 	})
 
@@ -1861,4 +1861,283 @@ func TestMiRackMultipleAudioModules_Skipped(t *testing.T) {
 			t.Errorf("Expected validation to pass, got reason: %s", reason)
 		}
 	})
+}
+
+// TestDetectRequiredChannelCount tests the detectRequiredChannelCount function.
+func TestDetectRequiredChannelCount(t *testing.T) {
+	tests := []struct {
+		name          string
+		cablesJSON    string
+		expectedCount string
+		expectError   bool
+	}{
+		{"no cables", "[]", "2", false},
+		{"port 0 only", `[{"outputModuleId": 1, "inputModuleId": 2, "outputId": 0, "inputId": 0}]`, "2", false},
+		{"port 1 only", `[{"outputModuleId": 1, "inputModuleId": 2, "outputId": 1, "inputId": 0}]`, "2", false},
+		{"port 3 (4-ch)", `[{"outputModuleId": 1, "inputModuleId": 2, "outputId": 3, "inputId": 0}]`, "8", false},
+		{"port 7 (8-ch)", `[{"outputModuleId": 1, "inputModuleId": 2, "outputId": 7, "inputId": 0}]`, "8", false},
+		{"port 8 (9-ch)", `[{"outputModuleId": 1, "inputModuleId": 2, "outputId": 8, "inputId": 0}]`, "16", false},
+		{"port 15 (16-ch)", `[{"outputModuleId": 1, "inputModuleId": 2, "outputId": 15, "inputId": 0}]`, "16", false},
+		{"port 16 (exceeds)", `[{"outputModuleId": 1, "inputModuleId": 2, "outputId": 16, "inputId": 0}]`, "", true},
+		{"input port 9 (10-ch)", `[{"outputModuleId": 2, "inputModuleId": 1, "outputId": 0, "inputId": 9}]`, "16", false},
+		{"both output 3 and input 0", `[{"outputModuleId": 1, "inputModuleId": 2, "outputId": 3, "inputId": 0}, {"outputModuleId": 3, "inputModuleId": 1, "outputId": 0, "inputId": 0}]`, "8", false},
+		{"output 7 and input 0", `[{"outputModuleId": 1, "inputModuleId": 2, "outputId": 7, "inputId": 0}, {"outputModuleId": 3, "inputModuleId": 1, "outputId": 0, "inputId": 0}]`, "8", false},
+		{"self-connection port 5", `[{"outputModuleId": 1, "inputModuleId": 1, "outputId": 5, "inputId": 5}]`, "8", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			patch := map[string]any{}
+			if err := json.Unmarshal([]byte(`{"cables": `+tt.cablesJSON+`}`), &patch); err != nil {
+				t.Fatalf("Failed to parse JSON: %v", err)
+			}
+
+			count, err := detectRequiredChannelCount(1, patch)
+
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("Expected error, got nil")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+				if count != tt.expectedCount {
+					t.Errorf("Expected %s, got %s", tt.expectedCount, count)
+				}
+			}
+		})
+	}
+}
+
+// TestSplitAudioModulesNative_PlainAudioInterface tests that plain "AudioInterface"
+// (from V0.6 conversion) is handled correctly during V2 → MiRack conversion.
+func TestSplitAudioModulesNative_PlainAudioInterface(t *testing.T) {
+	// V2 patch with plain "AudioInterface" (from V0.6 conversion) and no cables
+	// When there are no cables, only the output module is created
+	v2JSON := `{
+		"version": "2.6.6",
+		"modules": [
+			{"id": 1, "plugin": "Core", "model": "AudioInterface", "params": [], "pos": [10, 0]}
+		],
+		"cables": []
+	}`
+
+	var patch map[string]any
+	if err := json.Unmarshal([]byte(v2JSON), &patch); err != nil {
+		t.Fatalf("Failed to parse JSON: %v", err)
+	}
+
+	var issues []string
+	if err := splitAudioModulesNative(patch, &issues); err != nil {
+		t.Fatalf("splitAudioModulesNative failed: %v", err)
+	}
+
+	modules := patch["modules"].([]any)
+
+	// Should create AudioInterface output module only (no cables = no input module)
+	if len(modules) != 1 {
+		t.Fatalf("Expected 1 module, got %d", len(modules))
+	}
+
+	mod := modules[0].(map[string]any)
+	model, _ := mod["model"].(string)
+
+	if !isMiRackAudioOutputModule(model) {
+		t.Errorf("Expected AudioInterface output module, got %s", model)
+	}
+	if model != "AudioInterface" {
+		t.Errorf("Expected AudioInterface (2-channel default), got %s", model)
+	}
+}
+
+// TestSplitAudioModulesNative_PlainAudioInterfaceWithBothCables tests that plain "AudioInterface"
+// with both input and output cables creates both modules.
+func TestSplitAudioModulesNative_PlainAudioInterfaceWithBothCables(t *testing.T) {
+	// V2 patch with both output cable FROM audio and input cable TO audio
+	v2JSON := `{
+		"version": "2.6.6",
+		"modules": [
+			{"id": 1, "plugin": "Core", "model": "AudioInterface", "params": [], "pos": [10, 0]},
+			{"id": 2, "plugin": "Core", "model": "VCO-1", "params": [], "pos": [0, 0]},
+			{"id": 3, "plugin": "Core", "model": "VCA-1", "params": [], "pos": [5, 0]}
+		],
+		"cables": [
+			{"outputModuleId": 2, "inputModuleId": 1, "outputId": 0, "inputId": 0},
+			{"outputModuleId": 1, "inputModuleId": 3, "outputId": 0, "inputId": 0}
+		]
+	}`
+
+	var patch map[string]any
+	if err := json.Unmarshal([]byte(v2JSON), &patch); err != nil {
+		t.Fatalf("Failed to parse JSON: %v", err)
+	}
+
+	var issues []string
+	if err := splitAudioModulesNative(patch, &issues); err != nil {
+		t.Fatalf("splitAudioModulesNative failed: %v", err)
+	}
+
+	modules := patch["modules"].([]any)
+
+	// Should create both output and input modules (VCO-1 + AudioInterface output + AudioInterfaceIn + VCA-1)
+	if len(modules) != 4 {
+		t.Fatalf("Expected 4 modules, got %d", len(modules))
+	}
+
+	// Find audio modules
+	var outputMod, inputMod map[string]any
+	for _, m := range modules {
+		mod := m.(map[string]any)
+		model, _ := mod["model"].(string)
+		if isMiRackAudioOutputModule(model) {
+			outputMod = mod
+		}
+		if isMiRackAudioInputModule(model) {
+			inputMod = mod
+		}
+	}
+
+	if outputMod == nil {
+		t.Error("Should have AudioInterface output module")
+	}
+	if inputMod == nil {
+		t.Error("Should have AudioInterfaceIn input module")
+	}
+}
+
+// TestSplitAudioModulesNative_PlainAudioInterfaceWithInputOnly tests that plain "AudioInterface"
+// with only input cables creates only the input module.
+func TestSplitAudioModulesNative_PlainAudioInterfaceWithInputOnly(t *testing.T) {
+	// V2 patch with input cable TO the audio module only
+	v2JSON := `{
+		"version": "2.6.6",
+		"modules": [
+			{"id": 1, "plugin": "Core", "model": "AudioInterface", "params": [], "pos": [10, 0]},
+			{"id": 2, "plugin": "Core", "model": "VCO-1", "params": [], "pos": [0, 0]}
+		],
+		"cables": [
+			{"outputModuleId": 2, "inputModuleId": 1, "outputId": 0, "inputId": 0}
+		]
+	}`
+
+	var patch map[string]any
+	if err := json.Unmarshal([]byte(v2JSON), &patch); err != nil {
+		t.Fatalf("Failed to parse JSON: %v", err)
+	}
+
+	var issues []string
+	if err := splitAudioModulesNative(patch, &issues); err != nil {
+		t.Fatalf("splitAudioModulesNative failed: %v", err)
+	}
+
+	modules := patch["modules"].([]any)
+
+	// Should create only input module (hasInput=true, hasOutput=false, so createOutput=false)
+	// VCO-1 + AudioInterfaceIn
+	if len(modules) != 2 {
+		t.Fatalf("Expected 2 modules, got %d", len(modules))
+	}
+
+	// Find audio module
+	var inputMod map[string]any
+	for _, m := range modules {
+		mod := m.(map[string]any)
+		model, _ := mod["model"].(string)
+		if isMiRackAudioInputModule(model) {
+			inputMod = mod
+		}
+	}
+
+	if inputMod == nil {
+		t.Fatal("Should have AudioInterfaceIn input module")
+	}
+}
+
+// TestSplitAudioModulesNative_ChannelDetection tests that channel count is detected
+// from cable usage, not just model name.
+func TestSplitAudioModulesNative_ChannelDetection(t *testing.T) {
+	tests := []struct {
+		name               string
+		cablesJSON         string
+		expectedChannelOut string
+		expectedChannelIn  string
+	}{
+		{
+			"2-channel (port 0)",
+			`[{"outputModuleId": 1, "inputModuleId": 3, "outputId": 0, "inputId": 0}, {"outputModuleId": 2, "inputModuleId": 1, "outputId": 0, "inputId": 0}]`,
+			"AudioInterface",
+			"AudioInterfaceIn",
+		},
+		{
+			"8-channel (port 7)",
+			`[{"outputModuleId": 1, "inputModuleId": 3, "outputId": 7, "inputId": 0}, {"outputModuleId": 2, "inputModuleId": 1, "outputId": 0, "inputId": 0}]`,
+			"AudioInterface8",
+			"AudioInterfaceIn8",
+		},
+		{
+			"16-channel (port 15)",
+			`[{"outputModuleId": 1, "inputModuleId": 3, "outputId": 15, "inputId": 0}, {"outputModuleId": 2, "inputModuleId": 1, "outputId": 0, "inputId": 0}]`,
+			"AudioInterface16",
+			"AudioInterfaceIn16",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// V2 patch with plain "AudioInterface" and cables
+			// Includes both output (from audio to another module) and input (from another module to audio) cables
+			v2JSON := `{
+				"version": "2.6.6",
+				"modules": [
+					{"id": 1, "plugin": "Core", "model": "AudioInterface", "params": [], "pos": [10, 0]},
+					{"id": 2, "plugin": "Core", "model": "VCO-1", "params": [], "pos": [0, 0]},
+					{"id": 3, "plugin": "Core", "model": "VCA-1", "params": [], "pos": [5, 0]}
+				],
+				"cables": ` + tt.cablesJSON + `
+			}`
+
+			var patch map[string]any
+			if err := json.Unmarshal([]byte(v2JSON), &patch); err != nil {
+				t.Fatalf("Failed to parse JSON: %v", err)
+			}
+
+			var issues []string
+			if err := splitAudioModulesNative(patch, &issues); err != nil {
+				t.Fatalf("splitAudioModulesNative failed: %v", err)
+			}
+
+			modules := patch["modules"].([]any)
+
+			// Find the audio modules
+			var outputMod, inputMod map[string]any
+			for _, m := range modules {
+				mod := m.(map[string]any)
+				model, _ := mod["model"].(string)
+				if isMiRackAudioOutputModule(model) {
+					outputMod = mod
+				}
+				if isMiRackAudioInputModule(model) {
+					inputMod = mod
+				}
+			}
+
+			if outputMod == nil {
+				t.Fatal("No output module found")
+			}
+			if inputMod == nil {
+				t.Fatal("No input module found")
+			}
+
+			outputModel := outputMod["model"].(string)
+			inputModel := inputMod["model"].(string)
+
+			if outputModel != tt.expectedChannelOut {
+				t.Errorf("Expected output model %s, got %s", tt.expectedChannelOut, outputModel)
+			}
+			if inputModel != tt.expectedChannelIn {
+				t.Errorf("Expected input model %s, got %s", tt.expectedChannelIn, inputModel)
+			}
+		})
+	}
 }

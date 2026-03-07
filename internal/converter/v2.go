@@ -2,6 +2,8 @@ package converter
 
 import (
 	"fmt"
+	"path/filepath"
+	"strings"
 )
 
 // V2Handler implements FormatHandler for VCV Rack v2 format.
@@ -260,4 +262,29 @@ func GetIDToIndexMapping(patch map[string]any) map[int64]int {
 		return mapping
 	}
 	return nil
+}
+
+// DetectV2Format checks if the given path represents a VCV Rack v2 patch.
+// A v2 patch is identified by:
+// 1. The path has .vcv extension, AND
+// 2. The file is NOT a MiRack bundle, AND
+// 3. The file contains version "2.x.x" (in JSON or zstd archive)
+func DetectV2Format(path string, data []byte) bool {
+	// Must be .vcv file
+	if strings.ToLower(filepath.Ext(path)) != ".vcv" {
+		return false
+	}
+
+	// Not inside .mrk bundle (MiRack takes precedence)
+	parentDir := filepath.Dir(path)
+	if strings.ToLower(filepath.Ext(parentDir)) == ".mrk" {
+		return false
+	}
+
+	// Check version field - v2 has version "2.x.x"
+	version, err := extractVersion(data)
+	if err != nil {
+		return false
+	}
+	return strings.HasPrefix(version, "2.")
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // ============================================================================
@@ -27,12 +28,14 @@ var miRackColorPalette = []struct {
 
 // miRackToV2ModuleMap maps MiRack model names to VCV Rack V2 model names.
 // Only modules that have different names need to be listed.
+// Note: Audio modules are handled by merge logic, not by this map.
+// V2 audio modules: AudioInterface (8-ch), AudioInterface2 (2-ch), AudioInterface16 (16-ch).
 var miRackToV2ModuleMap = map[string]string{
-	// Audio modules - MiRack separate → V2 merged (mapping only, actual merging done separately)
-	"AudioInterface":     "AudioInterface2",
-	"AudioInterfaceIn":   "AudioInterface2",
-	"AudioInterface8":    "AudioInterface8",
-	"AudioInterfaceIn8":  "AudioInterface8",
+	// Audio modules - merged separately, these entries are for reference only
+	"AudioInterface":     "AudioInterface",
+	"AudioInterfaceIn":   "AudioInterface",
+	"AudioInterface8":    "AudioInterface",
+	"AudioInterfaceIn8":  "AudioInterface",
 	"AudioInterface16":   "AudioInterface16",
 	"AudioInterfaceIn16": "AudioInterface16",
 	// MIDI modules
@@ -184,14 +187,17 @@ func getChannelCountFromAudioModel(model string) string {
 }
 
 // getV2AudioModelName returns the V2 model name for a given channel count.
+// V2 audio modules: AudioInterface (8-ch), AudioInterface2 (2-ch), AudioInterface16 (16-ch).
 func getV2AudioModelName(channelCount string) string {
 	switch channelCount {
+	case "2":
+		return "AudioInterface2"
 	case "8":
-		return "AudioInterface8"
+		return "AudioInterface"
 	case "16":
 		return "AudioInterface16"
 	default:
-		return "AudioInterface2"
+		return "AudioInterface" // Default to 8-channel
 	}
 }
 
@@ -221,6 +227,7 @@ func getMiRackAudioInputModelName(channelCount string) string {
 
 // findAudioModulePairs finds matching audio input/output module pairs in the modules array.
 // Returns a list of pairs that should be merged.
+// Uses the maximum channel count when input/output have different channel counts.
 func findAudioModulePairs(modules []any) []audioModuleInfo {
 	var pairs []audioModuleInfo
 	pairedInputs := make(map[int]bool) // Track input modules already paired
@@ -260,14 +267,25 @@ func findAudioModulePairs(modules []any) []audioModuleInfo {
 				continue
 			}
 
-			// Check if this is the matching input module for our output
+			// Pair with any unpaired input module
+			// Use the MAXIMUM channel count between output and input
+			// This handles mismatched channel counts (e.g., 2-channel out + 8-channel in)
+			inputMod = inMod
+			inputIdx = j
+			inputID = getInt64FromMap(inMod, "id")
+			pairedInputs[j] = true
+			break
+		}
+
+		// Determine the final channel count for the merged module
+		// Use the maximum of output and input channel counts to accommodate both
+		finalChannelCount := channelCount
+		if inputMod != nil {
+			inModel := inputMod["model"].(string)
 			inChannelCount := getChannelCountFromAudioModel(inModel)
-			if inChannelCount == channelCount {
-				inputMod = inMod
-				inputIdx = j
-				inputID = getInt64FromMap(inMod, "id")
-				pairedInputs[j] = true
-				break
+			// Use the larger channel count
+			if inChannelCount == "16" || (inChannelCount == "8" && finalChannelCount != "16") {
+				finalChannelCount = inChannelCount
 			}
 		}
 
@@ -281,8 +299,8 @@ func findAudioModulePairs(modules []any) []audioModuleInfo {
 			inputIndex:     inputIdx,
 			outputModuleID: outputID,
 			inputModuleID:  inputID,
-			channelCount:   channelCount,
-			v2ModelName:    getV2AudioModelName(channelCount),
+			channelCount:   finalChannelCount,
+			v2ModelName:    getV2AudioModelName(finalChannelCount),
 		}
 		pairs = append(pairs, pair)
 	}
@@ -614,6 +632,72 @@ func splitAudioModulesRoundtrip(patch map[string]any, issues *[]string) error {
 	return nil
 }
 
+// detectRequiredChannelCount analyzes cables to determine required audio channel count.
+// Checks input and output ports SEPARATELY, returns max rounded up to available sizes.
+// Returns "2", "8", "16", or error if exceeds 16 (MiRack limit).
+func detectRequiredChannelCount(moduleID int64, patch map[string]any) (string, error) {
+	cables, ok := patch["cables"].([]any)
+	if !ok {
+		return "2", nil // Default to 2-channel if no cables
+	}
+
+	maxInputPort := int64(-1)
+	maxOutputPort := int64(-1)
+
+	for _, c := range cables {
+		cable, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		outputModuleID := getInt64FromMap(cable, "outputModuleId")
+		inputModuleID := getInt64FromMap(cable, "inputModuleId")
+
+		// Check output port (cable from this module)
+		if outputModuleID == moduleID {
+			outputPort := getInt64FromMap(cable, "outputId")
+			if outputPort > maxOutputPort {
+				maxOutputPort = outputPort
+			}
+		}
+
+		// Check input port (cable to this module)
+		if inputModuleID == moduleID {
+			inputPort := getInt64FromMap(cable, "inputId")
+			if inputPort > maxInputPort {
+				maxInputPort = inputPort
+			}
+		}
+	}
+
+	// Determine required channels from max port numbers
+	// Port numbering is 0-based: port 0 = channel 1, port 7 = channel 8
+	requiredChannels := int64(0)
+	if maxOutputPort >= 0 && maxOutputPort > requiredChannels {
+		requiredChannels = maxOutputPort + 1
+	}
+	if maxInputPort >= 0 && maxInputPort > requiredChannels {
+		requiredChannels = maxInputPort + 1
+	}
+
+	// Default to 2-channel if no cables connected
+	if requiredChannels == 0 {
+		return "2", nil
+	}
+
+	// Round up to available module sizes
+	if requiredChannels <= 2 {
+		return "2", nil
+	} else if requiredChannels <= 8 {
+		return "8", nil
+	} else if requiredChannels <= 16 {
+		return "16", nil
+	}
+
+	// Exceeds MiRack's 16-channel limit
+	return "", fmt.Errorf("audio requires %d channels, exceeds MiRack's 16-channel limit", requiredChannels)
+}
+
 // splitAudioModulesNative splits V2 audio modules based on cable usage analysis.
 // Used when converting native V2 patches (not from MiRack originally).
 func splitAudioModulesNative(patch map[string]any, issues *[]string) error {
@@ -635,13 +719,25 @@ func splitAudioModulesNative(patch map[string]any, issues *[]string) error {
 		}
 
 		model, _ := mod["model"].(string)
-		if model != "AudioInterface2" && model != "AudioInterface8" && model != "AudioInterface16" {
+		// Handle plain "AudioInterface" (for native V2 patches) and explicit channel variants
+		if model != "AudioInterface" && model != "AudioInterface2" && model != "AudioInterface8" && model != "AudioInterface16" {
+			newModules = append(newModules, m)
+			continue
+		}
+
+		moduleID := getInt64FromMap(mod, "id")
+
+		// Detect required channel count from cable usage
+		channelCount, err := detectRequiredChannelCount(moduleID, patch)
+		if err != nil {
+			// Store error for later reporting, skip this module
+			*issues = append(*issues, fmt.Sprintf("V2 → MiRack: %v", err))
 			newModules = append(newModules, m)
 			continue
 		}
 
 		// This is an audio module, analyze cable usage
-		moduleID := getInt64FromMap(mod, "id")
+		// moduleID already declared above
 
 		hasOutput := false
 		hasInput := false
@@ -668,12 +764,7 @@ func splitAudioModulesNative(patch map[string]any, issues *[]string) error {
 		}
 
 		// Determine channel count
-		channelCount := "2"
-		if model == "AudioInterface8" {
-			channelCount = "8"
-		} else if model == "AudioInterface16" {
-			channelCount = "16"
-		}
+		// channelCount already set by detectRequiredChannelCount above
 
 		// Decide which modules to create based on usage
 		createOutput := hasOutput || hasSelfConnection || (!hasInput && !hasOutput)
@@ -1034,6 +1125,7 @@ func NormalizeMiRack(patch map[string]any, issues *[]string) error {
 
 	// Pass 4: Apply MiRack → V2 module name mappings (for non-audio modules)
 	// Polyphony modules (Merge, Split, Sum) also need plugin → Fundamental
+	// Skip audio modules - they're already handled by the merge logic
 	if modules, ok := patch["modules"].([]any); ok {
 		for _, m := range modules {
 			mod, ok := m.(map[string]any)
@@ -1041,6 +1133,11 @@ func NormalizeMiRack(patch map[string]any, issues *[]string) error {
 				continue
 			}
 			model, _ := mod["model"].(string)
+
+			// Skip audio modules - they're already merged with correct names
+			if isMiRackAudioOutputModule(model) || isMiRackAudioInputModule(model) {
+				continue
+			}
 
 			if v2Model, exists := miRackToV2ModuleMap[model]; exists {
 				mod["model"] = v2Model
@@ -1219,6 +1316,26 @@ func convertHexToMiRackColorIndex(wire map[string]any, issues *[]string) {
 		}
 		delete(wire, "color")
 	}
+}
+
+// DetectMiRackFormat checks if the given path represents a MiRack patch.
+// A MiRack patch is identified by:
+// 1. The path has .mrk extension (directory bundle), OR
+// 2. The path ends with .mrk/patch.vcv (the patch.vcv file inside a .mrk bundle)
+func DetectMiRackFormat(path string) bool {
+	lowerPath := strings.ToLower(path)
+
+	// Direct .mrk path (directory bundle)
+	if strings.HasSuffix(lowerPath, ".mrk") {
+		return true
+	}
+
+	// patch.vcv inside .mrk bundle (both Unix and Windows path separators)
+	if strings.HasSuffix(lowerPath, ".mrk/patch.vcv") || strings.HasSuffix(lowerPath, ".mrk\\patch.vcv") {
+		return true
+	}
+
+	return false
 }
 
 // CreateMrkBundle creates a .mrk directory bundle with patch.vcv inside.

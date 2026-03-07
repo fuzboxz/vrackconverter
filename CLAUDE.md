@@ -234,42 +234,18 @@ FormatHandler.Write() → output file
 
 ### V06StyleConfig Pattern
 
-V0.6 and MiRack share 90% of their conversion logic. The `V06StyleConfig` struct enables code reuse via function callbacks:
+V0.6 and MiRack share 90% of their conversion logic. The `V06StyleConfig` struct enables code reuse via function callbacks that handle format-specific differences:
 
-```go
-// V06StyleConfig contains format-specific overrides for V0.6-style formats.
-type V06StyleConfig struct {
-    FormatName     string                                // For logging
-    HasFundamental bool                                  // true=v0.6, false=MiRack
-    ConvertColor   func(cable map[string]any, issues *[]string)  // Color conversion
-    NormalizePlugin   func(plugin, model string) (string, bool)   // Source → Internal
-    DenormalizePlugin func(plugin, model string) (string, bool)   // Internal → Target
-}
+**Configuration fields:**
+- `FormatName` - For logging/error messages
+- `HasFundamental` - Whether format has Fundamental plugin (v0.6: true, MiRack: false)
+- `ConvertColor` - Color conversion callback (MiRack uses colorIndex, v0.6 uses hex)
+- `NormalizePlugin` - Plugin name conversion during normalization
+- `DenormalizePlugin` - Plugin name conversion during denormalization
 
-// V0.6 uses this config:
-config := V06StyleConfig{
-    FormatName:     "v0.6",
-    HasFundamental: true,  // Has Fundamental plugin
-    ConvertColor:   nil,   // Uses hex already
-    NormalizePlugin:   func(p, m string) (string, bool) {
-        if p == "Fundamental" { return "Core", true }
-        return p, false
-    },
-    DenormalizePlugin: func(p, m string) (string, bool) {
-        if p == "Core" && fundamentalModules[m] { return "Fundamental", true }
-        return p, false
-    },
-}
-
-// MiRack uses this config:
-config := V06StyleConfig{
-    FormatName:     "MiRack",
-    HasFundamental: false, // NO Fundamental plugin
-    ConvertColor:   convertMiRackColorIndexToHex,  // Special color handling
-    NormalizePlugin:   func(p, m string) (string, bool) { return p, false },  // No-op
-    DenormalizePlugin: func(p, m string) (string, bool) { return p, false },  // No-op
-}
-```
+**Key differences handled:**
+- v0.6: Fundamental → Core plugin conversion
+- MiRack: No plugin conversion, but colorIndex → hex conversion
 
 ### Module Mapping Summary
 
@@ -280,19 +256,110 @@ config := V06StyleConfig{
 | MiRack → V2 | NormalizeMiRack | Module name mappings (e.g., MIDIBasicInterfaceOut → CV-MIDI) |
 | V2 → MiRack | DenormalizeMiRack | Reverse module name mappings |
 
+### Audio Module Handling
+
+Audio modules have different architectures across VCV Rack v0.6, V2, and MiRack formats. The converter handles these differences automatically.
+
+#### Architecture Differences
+
+| Format | Module Structure | Input/Output | Model Names |
+|--------|------------------|--------------|-------------|
+| **V0.6** | Single module | 8 separate inputs, 8 separate outputs | `AudioInterface` |
+| **V2** | Single module | X paired inputs + X paired outputs | `AudioInterface` (8-ch), `AudioInterface2` (2-ch), `AudioInterface16` (16-ch) |
+| **MiRack** | Two separate modules | Input module + Output module | `AudioInterfaceInX` + `AudioInterfaceX` |
+
+#### V0.6 → V2 Conversion
+
+V0.6's `AudioInterface` (8 channels) is converted to `AudioInterface` in V2. Both have 8 separate inputs and outputs. Implemented in `normalizeV06AudioModules()` in `v06.go`.
+
+#### MiRack → V2 Conversion
+
+MiRack's separate `AudioInterface` (output) and `AudioInterfaceInX` (input) modules are merged into a single V2 audio module. The channel count uses the **maximum** of input and output channel counts to handle mismatched pairs (e.g., 2-ch output + 8-ch input → 8-ch merged module).
+
+**Channel count mapping:**
+- 2-channel → `AudioInterface2`
+- 8-channel → `AudioInterface`
+- 16-channel → `AudioInterface16`
+
+Implemented in `findAudioModulePairs()` and `mergeAudioModules()` in `mirack.go`.
+
+#### V2 → MiRack Conversion
+
+V2's single audio module is split into two separate MiRack modules: one for output (`AudioInterfaceX`) and one for input (`AudioInterfaceInX`).
+
+Both modules receive the **same** channel count, determined by analyzing cable usage to find the maximum port number used, then rounding up to available sizes (2, 8, or 16 channels).
+
+**Roundtrip case**: If the patch was originally converted from MiRack, stored metadata is used to recreate the original module structure exactly.
+
+**Native V2 case**: For patches created in V2, cable analysis determines the required channels.
+
+Implemented in `detectRequiredChannelCount()`, `splitAudioModulesNative()`, and `splitAudioModulesRoundtrip()` in `mirack.go`.
+
 ### Key Files
 
 | File | Purpose |
 |------|---------|
-| `converter.go` | `ConvertFile()`, `ConvertDirectory()`, format detection |
+| `converter.go` | `ConvertFile()`, `ConvertDirectory()`, `detectFormat()`, `detectInputFormat()` |
 | `format.go` | `Format` enum, `FormatHandler` interface |
-| `archive.go` | `ExtractJSONFromV2()`, `CreateV2Patch()`, `IsV2Format()` |
+| `archive.go` | `ExtractJSONFromV2()`, `CreateV2Patch()`, `extractVersion()` |
 | `common.go` | `FromJSON()`, `ToJSON()`, `getInt64FromMap()`, color helpers |
 | `legacy.go` | `NormalizeV06Style()`, `DenormalizeV06Style()`, `V06StyleConfig` |
-| `v2.go` | `NormalizeV2()`, `DenormalizeV2()`, `V2Handler` |
-| `v06.go` | `NormalizeV06()`, `DenormalizeV06()`, `V06Handler`, `fundamentalModules` |
-| `mirack.go` | `NormalizeMiRack()`, `DenormalizeMiRack()`, `MiRackHandler`, module name maps, color palette |
+| `v2.go` | `NormalizeV2()`, `DenormalizeV2()`, `V2Handler`, `DetectV2Format()` |
+| `v06.go` | `NormalizeV06()`, `DenormalizeV06()`, `V06Handler`, `DetectV06Format()` |
+| `mirack.go` | `NormalizeMiRack()`, `DenormalizeMiRack()`, `MiRackHandler`, `DetectMiRackFormat()`, module name maps, color palette |
 | `metamodule.go` | `createHubMediumModule()` for --metamodule flag |
+| `converter_test.go` | Format detection tests |
+
+---
+
+## Format Detection Architecture
+
+Format detection is separated from I/O operations, with format-specific detection functions in each format handler file.
+
+### Detection Flow
+
+```
+input path
+    ↓
+detectFormat()
+    ├─ DetectMiRackFormat(path) → path-based (.mrk extension)
+    ├─ DetectV2Format(path, data) → version "2.x.x" + .vcv extension
+    └─ DetectV06Format(path, data) → version "0.x.x" + .vcv extension
+    ↓
+Format enum
+    ↓
+detectInputFormat()
+    ├─ GetFormatHandler(format)
+    └─ handler.Read(path) → JSON bytes + Format
+```
+
+### Detection Priority
+
+Detection checks formats in priority order:
+
+1. **MiRack** - Path-based detection (most specific)
+   - `.mrk` directory bundle
+   - `.mrk/patch.vcv` (patch file inside bundle)
+
+2. **V2** - Content-based detection
+   - `.vcv` extension
+   - NOT inside `.mrk` directory
+   - Version field starts with "2."
+
+3. **V0.6** - Content-based detection (fallback)
+   - `.vcv` extension
+   - NOT inside `.mrk` directory
+   - Version field starts with "0."
+
+### Why This Order?
+
+MiRack patches contain plain JSON with version "0.x.x" (same as v0.6), so they must be detected by path pattern first. Otherwise, a `.mrk/patch.vcv` file would be misidentified as v0.6 format.
+
+### Separation of Concerns
+
+- **Detection** (`Detect*Format()`) - Pure functions, return bool, no I/O
+- **Reading** (`FormatHandler.Read()`) - I/O operations, format-specific
+- **Orchestration** (`detectFormat()`, `detectInputFormat()`) - Coordinates detection and reading
 
 ---
 
@@ -343,49 +410,14 @@ The converter transforms this to:
 
 ### Conversion Implementation
 
-Located in `internal/converter/legacy.go`:
+Located in `internal/converter/legacy.go`, the conversion happens in two passes:
 
-```go
-// Pass 1: Build index-to-ID mapping
-indexToID := make(map[int]int64)
-for i, m := range modules {
-    if idVal, hasID := mod["id"]; hasID {
-        indexToID[i] = id  // Map array index to actual ID
-    } else {
-        indexToID[i] = int64(i)  // No ID? Use array index as ID
-    }
-}
-
-// Pass 2: Convert cable references
-for _, c := range cables {
-    outputModuleIdx := cable["outputModuleId"]  // This is array index
-    inputModuleIdx := cable["inputModuleId"]    // This is array index
-
-    // Convert array index to actual module ID
-    outputModuleID := indexToID[outputModuleIdx]
-    inputModuleID := indexToID[inputModuleIdx]
-
-    cable["outputModuleId"] = outputModuleID
-    cable["inputModuleId"] = inputModuleID
-}
-```
+1. **Pass 1**: Build index-to-ID mapping by iterating through modules array
+2. **Pass 2**: Convert cable references from array indices to module IDs using the mapping
 
 ### Roundtrip Mapping Preservation
 
-To enable V2 → v0.6/MiRack conversion, the original index-to-ID mapping is stored:
-
-```go
-// During normalization - store the mapping
-patch["_originalIndexToID"] = indexToID
-
-// During denormalization - retrieve and reverse
-if indexToIDRaw, ok := patch["_originalIndexToID"]; ok {
-    // Reverse the mapping: module ID → array index
-    for idx, id := range indexToIDRaw {
-        idToIndex[id] = idx
-    }
-}
-```
+To enable V2 → v0.6/MiRack conversion, the original index-to-ID mapping is stored in the patch metadata (`_originalIndexToID`). During denormalization, this mapping is retrieved and reversed (module ID → array index) to convert cable references back to array indices.
 
 ---
 
@@ -393,19 +425,9 @@ if indexToIDRaw, ok := patch["_originalIndexToID"]; ok {
 
 ### Pitfall 1: Assuming ID 0 is Invalid
 
-```go
-// WRONG:
-if moduleId == 0 {
-    // Remove this cable, module ID 0 doesn't exist
-    continue
-}
+**WRONG**: Assuming module ID 0 is invalid and removing cables referencing it.
 
-// CORRECT:
-if moduleId >= len(modules) {
-    // Remove this cable, array index out of range
-    continue
-}
-```
+**CORRECT**: Check if array index is out of range (>= len(modules)), not if ID equals 0.
 
 ### Pitfall 2: Mixed References
 
@@ -413,12 +435,7 @@ if moduleId >= len(modules) {
 
 ### Pitfall 3: Preserving Module IDs but Not Converting Cables
 
-```go
-// WRONG:
-module["id"] = module["id"]  // Keep ID 1, 2, 3, etc.
-cable["outputModuleId"] = wire["outputModuleId"]  // Still 0, 1, 2, etc.
-// This breaks because module ID 0 doesn't exist, but array index 0 does
-```
+When preserving module IDs during conversion, cable references must also be converted from array indices to module IDs. Failing to do so breaks because module ID 0 may not exist, but array index 0 does.
 
 ---
 
@@ -462,18 +479,7 @@ The app detects v2 format by **checking the version field** in the patch JSON, n
 
 ### Implementation
 
-Located in `internal/converter/archive.go`:
-
-```go
-// IsV2Format extracts the version field and checks if it starts with "2."
-func IsV2Format(data []byte) bool {
-    version, err := extractVersion(data)
-    if err != nil {
-        return false
-    }
-    return strings.HasPrefix(version, "2.")
-}
-```
+The `extractVersion()` function in `archive.go` extracts the version field from both plain JSON and zstd tar archives. Version string format determines the format (v2: "2.x.x", v0.6: "0.x.x").
 
 ### Result States
 
@@ -500,15 +506,10 @@ vrackconverter input.mrk -m  # Auto-generates .vcv with MetaModule
 
 ### Implementation
 
-Located in `internal/converter/metamodule.go`:
-
-```go
-// createHubMediumModule generates a HubMedium with:
-// - Plugin: "4msCompany", Model: "HubMedium"
-// - 14 parameters (12 knobs @ 0.5, 2 mode params @ 0)
-// - Positioned at maxX + 1 (immediately after rightmost module)
-func createHubMediumModule(existingModules []any, root map[string]any, inputFilename string) map[string]any
-```
+Located in `internal/converter/metamodule.go`, `createHubMediumModule()` generates a 4ms MetaModule (HubMedium) with:
+- Plugin: "4msCompany", Model: "HubMedium"
+- 14 parameters (12 knobs @ 0.5, 2 mode params @ 0)
+- Positioned at maxX + 1 (immediately after rightmost module)
 
 ---
 
