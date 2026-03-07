@@ -54,7 +54,9 @@ func extractVersion(data []byte) (string, error) {
 			return "", fmt.Errorf("tar read error: %w", err)
 		}
 
-		if header.Name == "patch.json" {
+		// Check for patch.json (with or without leading ./)
+		name := header.Name
+		if name == "./patch.json" || name == "patch.json" {
 			patchData, err := io.ReadAll(tarReader)
 			if err != nil {
 				return "", fmt.Errorf("failed to read patch.json: %w", err)
@@ -103,7 +105,9 @@ func ExtractJSONFromV2(vcvPath string) ([]byte, error) {
 			return nil, fmt.Errorf("failed to read tar entry: %w", err)
 		}
 
-		if header.Name == "patch.json" {
+		// Check for patch.json (with or without leading ./)
+		name := header.Name
+		if name == "./patch.json" || name == "patch.json" {
 			data, err := io.ReadAll(tarReader)
 			if err != nil {
 				return nil, fmt.Errorf("failed to read patch.json: %w", err)

@@ -10,13 +10,14 @@ import (
 )
 
 var (
-	Version     = "dev"
-	showHelp    bool
-	showVersion bool
-	outputPath  string
-	overwrite   bool
-	quiet       bool
-	metamodule  bool
+	Version      = "dev"
+	showHelp     bool
+	showVersion  bool
+	outputPath   string
+	outputFormat string
+	overwrite    bool
+	quiet        bool
+	metamodule   bool
 )
 
 func init() {
@@ -26,6 +27,7 @@ func init() {
 	flag.BoolVar(&showVersion, "version", false, "Show version")
 	flag.StringVar(&outputPath, "o", "", "Output file/directory")
 	flag.StringVar(&outputPath, "output", "", "Output file/directory")
+	flag.StringVar(&outputFormat, "format", "", "Output format: v2, v06, or mirack (overrides file extension)")
 	flag.BoolVar(&overwrite, "overwrite", false, "Overwrite input file in place")
 	flag.BoolVar(&quiet, "q", false, "Suppress non-error output")
 	flag.BoolVar(&quiet, "quiet", false, "Suppress non-error output")
@@ -34,12 +36,13 @@ func init() {
 }
 
 func printUsage() {
-	fmt.Fprintf(os.Stderr, `vrackconverter - Convert VCV Rack v0.6 compatible patches (including MiRack) to v2.0 format
+	fmt.Fprintf(os.Stderr, `vrackconverter - Convert between VCV Rack and MiRack patch formats
 
 Usage:
   vrackconverter <input> -o <output>     # Convert to new file
   vrackconverter <input> --overwrite     # Overwrite input file in place
   vrackconverter <input.mrk>             # Auto-create .vcv (never modifies .mrk)
+  vrackconverter <input.vcv> -o output.mrk  # Convert V2 to MiRack
   vrackconverter <dir-with-mrk>         # Auto-creates .vcv in same directory
   vrackconverter <dir> -o <output>       # Batch convert directory
 
@@ -48,6 +51,7 @@ Arguments:
 
 Flags:
   -o, --output <path>    Output file/directory (if not specified, requires --overwrite)
+      --format <fmt>     Output format: v2, v06, or mirack (overrides file extension)
       --overwrite        Overwrite input file in place
   -m, --metamodule       Add 4ms MetaModule (HubMedium) to patch
   -q, --quiet            Suppress non-error output
@@ -55,11 +59,21 @@ Flags:
   -h, --help             Show this help
 
 Examples:
-  vrackconverter old-patch.vcv -o new-patch.vcv
-  vrackconverter old-patch.vcv --overwrite
+  # MiRack to V2
   vrackconverter my-patch.mrk                      # Creates my-patch.vcv
   vrackconverter my-patch.mrk -o converted.vcv
   vrackconverter ./mrk-patches/                    # Creates .vcv alongside .mrk
+
+  # V2 to MiRack (NEW)
+  vrackconverter v2-patch.vcv -o output.mrk       # Creates output.mrk bundle
+  vrackconverter ./v2-patches/ -o ./mirack/        # Batch convert to MiRack
+
+  # Explicit format selection (NEW)
+  vrackconverter input.vcv -o output.vcv --format v06  # Force v0.6 format
+  vrackconverter input.vcv --overwrite --format v06     # In-place to v0.6
+
+  # In-place
+  vrackconverter old-patch.vcv --overwrite
   vrackconverter ./patches/ -o ./converted/        # Batch with output dir
 `)
 }
@@ -95,6 +109,20 @@ func directoryContainsMrkFiles(dirPath string) bool {
 	return hasMrk && !hasVcv
 }
 
+// parseOutputFormat converts a format string to a Format type.
+func parseOutputFormat(formatStr string) (converter.Format, error) {
+	switch strings.ToLower(strings.TrimSpace(formatStr)) {
+	case "v2", "vcv2", "2":
+		return converter.FormatVCV2, nil
+	case "v06", "v0.6", "vcv06", "vcv0.6", "0.6", "06":
+		return converter.FormatVCV06, nil
+	case "mirack", "mrk":
+		return converter.FormatMiRack, nil
+	default:
+		return "", fmt.Errorf("invalid format: %s (must be v2, v06, or mirack)", formatStr)
+	}
+}
+
 func main() {
 	flag.Usage = printUsage
 
@@ -110,6 +138,11 @@ func main() {
 		case "-o", "--output":
 			if i+1 < len(args) {
 				outputPath = args[i+1]
+				i++ // skip the value
+			}
+		case "--format":
+			if i+1 < len(args) {
+				outputFormat = args[i+1]
 				i++ // skip the value
 			}
 		case "--overwrite":
@@ -153,6 +186,16 @@ func main() {
 		MetaModule: metamodule,
 	}
 
+	// Parse output format if specified
+	if outputFormat != "" {
+		format, err := parseOutputFormat(outputFormat)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		opts.OutputFormat = format
+	}
+
 	// Check for .mrk bundles BEFORE directory check, since .mrk bundles are directories
 	// but should be treated as single files for conversion
 	if isMrkFile(inputPath) {
@@ -175,7 +218,7 @@ func main() {
 		}
 		// Note: .mrk files themselves are never modified since outputPath != inputPath
 		// The --overwrite flag controls whether the auto-generated .vcv can be overwritten
-		convertFile(inputPath, outputPath, opts)
+		doConvert(inputPath, outputPath, opts)
 		return
 	}
 
@@ -197,7 +240,7 @@ func main() {
 				os.Exit(1)
 			}
 		}
-		convertDirectory(inputPath, outputPath, opts)
+		doConvertDirectory(inputPath, outputPath, opts)
 		return
 	}
 
@@ -208,16 +251,16 @@ func main() {
 		printUsage()
 		os.Exit(1)
 	}
+
+	// In-place conversion: output = input
 	if outputPath == "" && overwrite {
-		// In-place conversion: output = input
 		outputPath = inputPath
 	}
 
-	// Single file conversion
-	convertFile(inputPath, outputPath, opts)
+	doConvert(inputPath, outputPath, opts)
 }
 
-func convertFile(inputPath, outputPath string, opts converter.Options) {
+func doConvert(inputPath, outputPath string, opts converter.Options) {
 	if !opts.Quiet {
 		if inputPath == outputPath {
 			fmt.Printf("Converting: %s (in place)\n", inputPath)
@@ -228,8 +271,12 @@ func convertFile(inputPath, outputPath string, opts converter.Options) {
 
 	result := converter.ConvertFile(inputPath, outputPath, opts)
 	if result.Skipped {
-		// File is already v2 format - informational, not an error
-		fmt.Fprintf(os.Stderr, "info: file is already in VCV Rack v2 format (no conversion needed)\n")
+		if len(result.Issues) > 0 {
+			// Validation skip (e.g., MiRack audio module constraints)
+			fmt.Fprintf(os.Stderr, "info: %s (skipped)\n", result.Issues[0])
+		} else {
+			fmt.Fprintf(os.Stderr, "info: file is already in target format (no conversion needed)\n")
+		}
 		os.Exit(0)
 	}
 	if !result.Success {
@@ -248,7 +295,7 @@ func convertFile(inputPath, outputPath string, opts converter.Options) {
 	}
 }
 
-func convertDirectory(inputDir, outputDir string, opts converter.Options) {
+func doConvertDirectory(inputDir, outputDir string, opts converter.Options) {
 	if !opts.Quiet {
 		fmt.Printf("Converting directory: %s -> %s\n", inputDir, outputDir)
 	}
@@ -264,7 +311,11 @@ func convertDirectory(inputDir, outputDir string, opts converter.Options) {
 		if result.Skipped {
 			skipCount++
 			if !opts.Quiet {
-				fmt.Printf("  ⊘ %s (already v2)\n", relPath)
+				if len(result.Issues) > 0 {
+					fmt.Printf("  ⊘ %s (%s)\n", relPath, result.Issues[0])
+				} else {
+					fmt.Printf("  ⊘ %s (already in target format)\n", relPath)
+				}
 			}
 		} else if result.Success {
 			successCount++
