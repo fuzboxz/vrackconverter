@@ -209,36 +209,66 @@ func ConvertFile(inputPath, outputPath string, opts Options) Result {
 	return result
 }
 
-// detectInputFormat detects the format of the input file and returns the data and format.
-func detectInputFormat(inputPath string) ([]byte, Format, error) {
-	// Check file extension first - .mrk bundles are MiRack format
-	ext := strings.ToLower(filepath.Ext(inputPath))
-	if ext == ".mrk" {
-		mrkHandler := &MiRackHandler{}
-		data, err := mrkHandler.Read(inputPath)
-		if err != nil {
-			return nil, FormatUnknown, fmt.Errorf("failed to read MiRack bundle: %w", err)
-		}
-		return data, FormatMiRack, nil
+// detectFormat determines the format of a patch file at the given path.
+// Returns FormatUnknown if the format cannot be determined.
+func detectFormat(path string) Format {
+	// Try format-specific detection in priority order
+	// MiRack first (has most specific detection - .mrk extension check)
+	if DetectMiRackFormat(path) {
+		return FormatMiRack
 	}
 
-	// For .vcv files, check if v2 or v0.6 format
-	rawData, err := os.ReadFile(inputPath)
+	// Read file content for content-based detection
+	// For .mrk directories, we'll read the patch.vcv inside
+	var readPath string
+	var data []byte
+	var err error
+
+	// Check if path is a directory (MiRack bundle)
+	info, statErr := os.Stat(path)
+	if statErr == nil && info.IsDir() {
+		// It's a directory, try reading patch.vcv inside
+		readPath = filepath.Join(path, "patch.vcv")
+		data, err = os.ReadFile(readPath)
+	} else {
+		readPath = path
+		data, err = os.ReadFile(path)
+	}
+
 	if err != nil {
-		return nil, FormatUnknown, fmt.Errorf("failed to read input: %w", err)
+		return FormatUnknown
 	}
 
-	if IsV2Format(rawData) {
-		// Extract JSON from v2 archive
-		jsonData, err := ExtractJSONFromV2(inputPath)
-		if err != nil {
-			return nil, FormatUnknown, fmt.Errorf("failed to extract JSON from v2 archive: %w", err)
-		}
-		return jsonData, FormatVCV2, nil
+	// V2 next (zstd archives with version "2.x.x")
+	if DetectV2Format(readPath, data) {
+		return FormatVCV2
 	}
 
-	// Assume v0.6 format (plain JSON)
-	return rawData, FormatVCV06, nil
+	// V0.6 last (plain JSON with version "0.x.x")
+	if DetectV06Format(readPath, data) {
+		return FormatVCV06
+	}
+
+	return FormatUnknown
+}
+
+// detectInputFormat detects the format and reads the input file.
+// Returns the JSON data, detected format, and any error.
+func detectInputFormat(inputPath string) ([]byte, Format, error) {
+	// First, detect the format
+	format := detectFormat(inputPath)
+	if format.IsUnknown() {
+		return nil, FormatUnknown, fmt.Errorf("unable to detect format for: %s", inputPath)
+	}
+
+	// Then read using the appropriate handler
+	handler := GetFormatHandler(format)
+	data, err := handler.Read(inputPath)
+	if err != nil {
+		return nil, FormatUnknown, fmt.Errorf("failed to read %s file: %w", format, err)
+	}
+
+	return data, format, nil
 }
 
 // DetectFormatFromExtension detects format from file extension.
