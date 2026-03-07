@@ -1,9 +1,14 @@
 {
   "hooks": {
-    "PreRespond": [
+    "PostToolUse": [
       {
-        "pattern": "write|edit|code|func|package|import",
-        "command": "make fmt && make vet"
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "make fmt && make vet"
+          }
+        ]
       }
     ]
   }

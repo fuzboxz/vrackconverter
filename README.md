@@ -1,6 +1,6 @@
 # VRackConverter
 
-Convert VCV Rack v0.6 compatible patches (including MiRack) to VCV Rack v2.0 compatible format.
+Convert patches between VCV Rack v0.6, MiRack, and VCV Rack v2 formats.
 
 ## Installation
 
@@ -31,22 +31,39 @@ vrackconverter <input.mrk>             # Auto-create .vcv (never modifies .mrk)
 | Flag | Description |
 |------|-------------|
 | `-o, --output <path>` | Output file or directory |
+| `-f, --format <format>` | Override auto-detected output format: `vcv2`, `vcv06`, or `mirack` |
 | `--overwrite` | Overwrite input file in place |
-| `-m, --metamodule` | Add 4ms MetaModule (HubMedium) to converted patch |
+| `-m, --metamodule` | Add 4ms MetaModule (HubMedium) when converting to VCV Rack v2 |
 | `-q, --quiet` | Suppress non-error output |
 | `-V, --version` | Show version |
 | `-h, --help` | Show help |
 
 ### Behavior
 
-- **v2 files**: If a file is already in VCV Rack v2 format, it will be detected and skipped with an informational message
-- **Mixed directories**: When converting directories, v2 files are shown as skipped and don't cause the operation to fail
+- **Format detection**: Output format is auto-detected from the file extension (`.vcv` → VCV Rack v2, `.mrk` → MiRack)
+- **Format override**: Use `-f/--format` to force a specific output format regardless of extension
+- **Same-format skip**: If input and output formats are the same, conversion is skipped with an informational message
+- **Mixed directories**: When converting directories, files already in the target format are skipped and don't cause failure
 - **Exit codes**: `0` = success (including skipped files), `1` = error
+
+### Supported Formats
+
+| Format | Flag | Description |
+|--------|------|-------------|
+| VCV Rack v2 | `vcv2` | Current default format, uses `cables` and module IDs |
+| MiRack | `mirack` | macOS/iPadOS Rack format, directory bundle (.mrk) |
+| VCV Rack v0.6 | `vcv06` | Legacy format (experimental, unsupported) |
+
+The converter handles the complex differences between formats:
+- **Core modules**: Maps between Fundamental/Core plugin naming conventions
+- **Audio interfaces**: Merges/splits audio modules appropriately (MiRack uses separate in/out modules)
+- **Cables/Wires**: Converts between array index references and module IDs
+- **Colors**: Maps MiRack's 6-color palette to/from hex colors
 
 ### Examples
 
 ```bash
-# Convert to a new file
+# Convert to a new file (defaults to VCV Rack v2)
 vrackconverter old-patch.vcv -o new-patch.vcv
 
 # Overwrite the input file in place
@@ -55,8 +72,8 @@ vrackconverter old-patch.vcv --overwrite
 # Convert .mrk (MiRack) bundle - auto-creates .vcv
 vrackconverter my-patch.mrk
 
-# Specify output for .mrk file
-vrackconverter my-patch.mrk -o converted.vcv
+# Convert to MiRack format
+vrackconverter my-patch.vcv -o my-patch.mrk -f mirack
 
 # Convert with MetaModule support (adds 4ms MetaModule)
 vrackconverter old-patch.vcv -o new-patch.vcv --metamodule
@@ -74,7 +91,7 @@ vrackconverter already-v2.vcv -o output.vcv
 This tool was made possible by the excellent work of:
 
 - [VCV Rack](https://github.com/VCVRack/Rack) - Open-source virtual modular synthesizer
-- [MiRack](https://github.com/miRackModular/Rack) - MiRack modular synthesizer
+- [MiRack](https://github.com/miRackModular/Rack) - Virtual modular synthesizer for macOS/iPadOS
 - [Cardinal](https://github.com/DISTRHO/Cardinal) - Cardinal synthesizer plugin
 
 ## License

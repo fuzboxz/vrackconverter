@@ -50,7 +50,7 @@ Runs only on version tags for the canonical repository after build succeeds.
 Creates a GitHub release with:
 - All 6 platform archives
 - SHA256 checksums file
-- Auto-generated release notes (excludes co-authored commits)
+- Auto-generated release notes (using GitHub Release Notes API)
 
 ## Build Artifacts
 

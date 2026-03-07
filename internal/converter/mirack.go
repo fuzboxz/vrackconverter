@@ -1206,6 +1206,31 @@ func NormalizeMiRack(patch map[string]any, issues *[]string) error {
 	// Ensure version is set
 	patch["version"] = "2.6.6"
 
+	// Pass 6: Handle Notes module text field conversion
+	// MiRack stores notes text in module-level "text" field
+	// V2 stores notes text in data.text field
+	if modules, ok := patch["modules"].([]any); ok {
+		for _, m := range modules {
+			mod, ok := m.(map[string]any)
+			if !ok {
+				continue
+			}
+			model, _ := mod["model"].(string)
+			if model == "Notes" {
+				// Move module-level "text" to "data.text" for V2 format
+				if text, ok := mod["text"].(string); ok {
+					if mod["data"] == nil {
+						mod["data"] = make(map[string]any)
+					}
+					if data, ok := mod["data"].(map[string]any); ok {
+						data["text"] = text
+					}
+					delete(mod, "text")
+				}
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -1286,6 +1311,32 @@ func DenormalizeMiRack(patch map[string]any, issues *[]string) error {
 				// Polyphony modules are in Core plugin in MiRack, not Fundamental
 				if isPolyphonyModule(model) {
 					mod["plugin"] = "Core"
+				}
+			}
+		}
+	}
+
+	// Pass 4: Handle Notes module text field conversion
+	// V2 stores notes text in data.text field
+	// MiRack stores notes text in module-level "text" field
+	if modules, ok := patch["modules"].([]any); ok {
+		for _, m := range modules {
+			mod, ok := m.(map[string]any)
+			if !ok {
+				continue
+			}
+			model, _ := mod["model"].(string)
+			if model == "Notes" {
+				// Move "data.text" to module-level "text" for MiRack format
+				if data, ok := mod["data"].(map[string]any); ok {
+					if text, ok := data["text"].(string); ok {
+						mod["text"] = text
+						delete(data, "text")
+						// Remove data object if it's now empty
+						if len(data) == 0 {
+							delete(mod, "data")
+						}
+					}
 				}
 			}
 		}
