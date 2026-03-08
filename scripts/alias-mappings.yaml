@@ -1,0 +1,93 @@
+# Cross-platform module alias mappings
+#
+# This file maps modules between different platforms to help with
+# deduplication and conversion.
+#
+# Format:
+#   "Plugin/Model":
+#     name: "Alternative display name"
+#     plugin: "Alternative plugin name"
+#     model: "Alternative model name"
+#
+# Or as a simple string for name alias only:
+#   "Plugin/Model": "Alternative name"
+
+aliases:
+  # Core modules - Fundamental plugin in VCV Rack v0.6
+  "Fundamental/8vert": {}
+  "Fundamental/ADSR": {}
+  "Fundamental/CMP": {}
+  "Fundamental/Delay": {}
+  "Fundamental/Gate": {}
+  "Fundamental/LFO": {}
+  "Fundamental/LFO-1": {}
+  "Fundamental/Merge": {}
+  "Fundamental/MidSide": {}
+  "Fundamental/Mixer": {}
+  "Fundamental/Mutes": {}
+  "Fundamental/Notes": {}
+  "Fundamental/PinkNoise": {}
+  "Fundamental/Quantizer": {}
+  "Fundamental/Random": {}
+  "Fundamental/Scope": {}
+  "Fundamental/SEQ3": {}
+  "Fundamental/Split": {}
+  "Fundamental/Sum": {}
+  "Fundamental/Unity": {}
+  "Fundamental/VCA-1": {}
+  "Fundamental/VCF": {}
+  "Fundamental/VCO": {}
+  "Fundamental/WhiteNoise": {}
+
+  # MiRack specific aliases
+  "Fundamental/MIDICC":
+    plugin: "MiRack"
+    model: "MIDICCInterface"
+  "CV-MIDI/MIDICC":
+    plugin: "Fundamental"
+    model: "MIDICC"
+
+  "Fundamental/MIDICCtoCV":
+    plugin: "MiRack"
+    model: "MIDICCInterface"
+  "MIDICCToCVInterface/MIDICCToCV":
+    plugin: "Fundamental"
+    model: "MIDICC"
+
+  "Fundamental/MIDIGate":
+    plugin: "MiRack"
+    model: "MIDITriggerInterface"
+  "CV-Gate/MIDIGate":
+    plugin: "Fundamental"
+    model: "MIDIGate"
+
+  # Audio modules
+  "Core/AudioInterface":
+    model: "AudioInterface8"
+  "Core/AudioInterface2":
+    model: "AudioInterface2"
+  "Core/AudioInterface16":
+    model: "AudioInterface16"
+
+  # Merge/Split variants
+  "Core/Merge":
+    model: "Merge"
+  "Poly/Merge":
+    plugin: "Core"
+    model: "Merge"
+
+  "Core/Split":
+    model: "Split"
+  "Poly/Split":
+    plugin: "Core"
+    model: "Split"
+
+  "Core/Sum":
+    model: "Sum"
+  "Poly/Sum":
+    plugin: "Core"
+    model: "Sum"
+
+  # 4ms MetaModule HubMedium
+  "4msCompany/HubMedium":
+    name: "MetaModule Hub"
