@@ -4,6 +4,8 @@
 
 A Go-based tool for converting patches between VCV Rack v0.6, MiRack, and VCV Rack v2.x formats.
 
+Includes both a **GUI application** (default) and a **CLI tool** for automation.
+
 ---
 
 ## Development Workflow
@@ -33,18 +35,21 @@ A Go-based tool for converting patches between VCV Rack v0.6, MiRack, and VCV Ra
 
 ### Make Targets
 
-For full Makefile documentation, see [Makefile.md](../Makefile.md).
+For full Makefile documentation, see [Makefile.md](Makefile.md).
 
 Quick reference:
 ```bash
-make              # Format, vet, test, and build (default)
-make build        # Build for current platform
-make build-all    # Build for all platforms
+make              # Format, vet, build CLI, test, build GUI (default)
+make build        # Build GUI for current platform (default binary: vrackconverter)
+make build-cli    # Build CLI for current platform (binary: vrackconverter-cli)
+make build-all    # Build GUI and CLI for all platforms
+make run          # Build and run GUI
 make test         # Run tests
 make fmt          # Format code
 make vet          # Run go vet
 make clean        # Remove build artifacts
-make install      # Install to $GOPATH/bin or /usr/local/bin
+make install      # Install GUI to $GOPATH/bin or /usr/local/bin
+make install-cli  # Install CLI to $GOPATH/bin or /usr/local/bin
 ```
 
 ### Commit Message Convention
@@ -169,22 +174,27 @@ func TestNormalizeV06_WithIDs(t *testing.T) {
 ```
 vrackconverter/
 ├── cmd/
-│   └── vrackconverter/
-│       ├── main.go          # CLI entry point
-│       └── main_test.go     # CLI integration tests
+│   ├── vrackconverter/          # CLI entry point
+│   │   ├── main.go              # CLI main
+│   │   └── main_test.go         # CLI integration tests
+│   └── vrackconverter-gui/      # GUI application (Fyne)
+│       ├── main.go              # GUI entry point
+│       ├── app.go               # Application state and logic
+│       ├── ui.go                # UI layout creation
+│       └── conversion.go        # Conversion orchestration
 ├── internal/
 │   └── converter/
-│       ├── converter.go     # Single pipeline orchestration
-│       ├── format.go        # Format type definitions (Format enum, IsV2, etc.)
-│       ├── archive.go       # Zstd tar I/O (ExtractJSONFromV2, CreateV2Patch)
-│       ├── common.go        # Shared utilities (FromJSON, ToJSON, getInt64FromMap, etc.)
-│       ├── legacy.go        # V06StyleConfig + shared V0.6/MiRack baseline
-│       ├── metamodule.go    # MetaModule (HubMedium) module creation
-│       ├── v2.go            # V2 format handler (NormalizeV2, DenormalizeV2)
-│       ├── v06.go           # V0.6 format handler (uses legacy baseline + Fundamental plugin)
-│       ├── mirack.go        # MiRack format handler (module name mappings, color conversion)
-│       ├── *_test.go        # Unit tests (co-located with source files)
-│       └── mirack_cables_test.go  # Fixture-based test for test/mirack_cables.mrk
+│       ├── converter.go         # Single pipeline orchestration
+│       ├── format.go            # Format type definitions (Format enum, IsV2, etc.)
+│       ├── archive.go           # Zstd tar I/O (ExtractJSONFromV2, CreateV2Patch)
+│       ├── common.go            # Shared utilities (FromJSON, ToJSON, getInt64FromMap, etc.)
+│       ├── legacy.go            # V06StyleConfig + shared V0.6/MiRack baseline
+│       ├── metamodule.go        # MetaModule (HubMedium) module creation
+│       ├── v2.go                # V2 format handler (NormalizeV2, DenormalizeV2)
+│       ├── v06.go               # V0.6 format handler (uses legacy baseline + Fundamental plugin)
+│       ├── mirack.go            # MiRack format handler (module name mappings, color conversion)
+│       ├── *_test.go            # Unit tests (co-located with source files)
+│       └── mirack_cables_test.go # Fixture-based test for test/mirack_cables.mrk
 └── Makefile
 ```
 
@@ -219,6 +229,53 @@ FormatHandler.Write() → output file
 | **VCV Rack v0.6** | `V06Handler` | Zstd tar archive | Has Fundamental + Core plugins |
 | **MiRack** | `MiRackHandler` | Directory bundle (.mrk) | Uses Core and Fundamental plugins |
 | **VCV Rack v2** | `V2Handler` (default) | Zstd tar archive | Core + Fundamental plugins |
+
+### GUI Architecture
+
+The GUI is built with [Fyne](https://fyne.io/), a cross-platform GUI toolkit for Go.
+
+**File**: `cmd/vrackconverter-gui/`
+
+| File | Purpose |
+|------|---------|
+| `main.go` | Entry point, creates Fyne app and window |
+| `app.go` | Application state, file management, conversion orchestration |
+| `ui.go` | UI layout, widgets, drag-and-drop handling |
+| `conversion.go` | Batch conversion with progress tracking |
+
+**Key Components:**
+
+```go
+// ConverterGUI holds the application state and UI widgets
+type ConverterGUI struct {
+    app    fyne.App
+    window fyne.Window
+
+    // State
+    inputFiles        []string
+    fileStatuses      map[string]*FileStatus
+    selectedFileIndex int
+    outputDir         string
+    outputFormat      converter.Format
+    // ...
+}
+```
+
+**Layout:**
+- **Left Panel**: File queue with drag-and-drop, conversion log
+- **Right Panel**: Global settings, patch inspector, convert button
+
+**Patch Detection:**
+The GUI uses the shared `converter.DetectInputFormat()` function to properly detect:
+- VCV v2 archives (zstd tar with version "2.x")
+- VCV v0.6 files (plain JSON or zstd tar with version "0.x")
+- MiRack .mrk bundles (directories with `patch.json`)
+
+**Status Indicators:**
+- `[OK]` - Ready to convert
+- `[!]` - Warning (e.g., no modules)
+- `[X]` - Error
+- `[--]` - Skipped (already in target format)
 
 ### Key Format Differences
 
@@ -563,7 +620,9 @@ Cardinal ──────────▶│  Cardinal → common  │───
 
 ### Build
 ```bash
-make build
+make build       # Build GUI (vrackconverter)
+make build-cli   # Build CLI (vrackconverter-cli)
+make run         # Build and run GUI
 ```
 
 ### Test
@@ -571,16 +630,23 @@ make build
 make test
 ```
 
-### Convert
+### Run GUI
+```bash
+./vrackconverter
+# or
+make run
+```
+
+### Convert (CLI)
 ```bash
 # MiRack to V2
-./vrackconverter input.mrk
+./vrackconverter-cli input.mrk
 
 # V2 to MiRack
-./vrackconverter input.vcv -o output.mrk
+./vrackconverter-cli input.vcv -o output.mrk
 
 # In-place conversion
-./vrackconverter input.vcv --overwrite
+./vrackconverter-cli input.vcv --overwrite
 ```
 
 ---
