@@ -1,5 +1,7 @@
 # vRackConverter
 
+<img src="logo.png" alt="vRackConverter Logo" width="256">
+
 Convert VCV Rack v0.6 compatible patches (including MiRack) to VCV Rack v2.0 compatible format.
 
 ## Features
