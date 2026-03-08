@@ -2,7 +2,7 @@
 
 ## Overview
 
-The CI/CD pipeline runs tests, cross-compiles CLI and GUI binaries for multiple platforms, and creates GitHub releases with checksums.
+The CI/CD pipeline runs tests, builds CLI and GUI binaries for multiple platforms, and creates GitHub releases with checksums.
 
 ## Workflow File
 
@@ -16,7 +16,7 @@ The CI/CD pipeline runs tests, cross-compiles CLI and GUI binaries for multiple 
 |-------|--------------|----------|
 | Pull Request | Any | Test only |
 | Push to main | main | Test only |
-| Push tag | `v*.*.*` | Test + Build (CLI + GUI) + Release |
+| Push tag | `v*.*.*` | Test + Build + Release |
 
 ## Jobs
 
@@ -29,29 +29,26 @@ Steps:
 2. Set up Go 1.23
 3. Cache Go modules
 4. Download and verify dependencies
-5. Build binary (required for CLI integration tests)
+5. Build CLI binary (required for E2E tests)
 6. Run tests with race detector
+7. On failure, re-run E2E tests with verbose output
 
-### Build Job (CLI)
+### Build Job
 
 Runs only on version tags (`v*.*.*`) for the canonical repository.
 
-Builds CLI binaries for 6 platform combinations using cross-compilation:
+Builds CLI and GUI for all platforms using a matrix strategy:
+
+| Runner | Builds | Description |
+|--------|--------|-------------|
+| `macos-latest` | GUI (macOS arm64) | Apple Silicon only (Intel users build locally) |
+| `ubuntu-latest` | GUI (Linux) + CLI (all 6 platforms) | Linux GUI + cross-compile all CLI variants |
+| `windows-latest` | GUI (Windows amd64) | Native Windows build |
+
+**CLI variants** (built from Linux runner with `CGO_ENABLED=0`):
 - linux-amd64, linux-arm64
 - darwin-amd64, darwin-arm64
 - windows-amd64, windows-arm64
-
-Each binary is packaged as a tar.gz (Unix) or zip (Windows) archive.
-
-### Build GUI Job (GUI)
-
-Runs only on version tags (`v*.*.*`) for the canonical repository.
-
-Builds GUI packages using platform-specific runners (required for CGO/Fyne):
-- macOS arm64 on `macos-latest` → `.app.tar.gz`
-- macOS amd64 on `macos-13` → `.app.tar.gz`
-- Linux (amd64) on `ubuntu-latest` → `.tar.gz`
-- Windows (amd64) on `windows-latest` → `.zip`
 
 ### Release Job
 
@@ -81,14 +78,13 @@ Creates a GitHub release with:
 | Platform | Archive Format | Description |
 |----------|---------------|-------------|
 | darwin-arm64 | .app.tar.gz | macOS Apple Silicon app bundle |
-| darwin-amd64 | .app.tar.gz | macOS Intel app bundle |
 | linux-amd64 | tar.gz | Linux executable |
 | windows-amd64 | zip | Windows executable |
 
 ## Cross-Compilation
 
 ### CLI (Pure Go)
-- Builds from a single Linux runner using Go's cross-compilation
+- All 6 platform variants built from single Linux runner
 - `CGO_ENABLED=0` - No C dependencies
 - `GOOS` and `GOARCH` set via environment variables
 - Statically linked and portable
@@ -108,7 +104,15 @@ To create a release:
    git tag -a v1.0.0 -m "Release 1.0.0"
    git push origin v1.0.0
    ```
-3. GitHub Actions automatically builds CLI and GUI, then creates the release
+3. GitHub Actions automatically builds and creates the release
+
+For beta/pre-releases:
+```bash
+git tag -a v1.0.0-beta.1 -m "Beta 1.0.0"
+git push origin v1.0.0-beta.1
+```
+
+Tags containing `-beta`, `-rc`, or `-alpha` are marked as pre-releases.
 
 To re-run a failed release:
 1. Delete the tag locally and remotely
