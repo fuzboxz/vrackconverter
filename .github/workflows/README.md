@@ -48,7 +48,8 @@ Each binary is packaged as a tar.gz (Unix) or zip (Windows) archive.
 Runs only on version tags (`v*.*.*`) for the canonical repository.
 
 Builds GUI packages using platform-specific runners (required for CGO/Fyne):
-- macOS (arm64 + amd64) on `macos-latest` → `.app.tar.gz` (both archs on one runner)
+- macOS arm64 on `macos-latest` → `.app.tar.gz`
+- macOS amd64 on `macos-13` → `.app.tar.gz`
 - Linux (amd64) on `ubuntu-latest` → `.tar.gz`
 - Windows (amd64) on `windows-latest` → `.zip`
 
