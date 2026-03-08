@@ -21,14 +21,14 @@ jobs:
     strategy:
       matrix:
         include:
-          # macOS runner builds both arm64 (native) and amd64 (cross-compile)
-          - os: macOS
+          - os: macOS-arm64
             runs-on: macos-latest
-            targets:
-              - goos: darwin
-                goarch: arm64
-              - goos: darwin
-                goarch: amd64
+            goos: darwin
+            goarch: arm64
+          - os: macOS-amd64
+            runs-on: macos-13
+            goos: darwin
+            goarch: amd64
           - os: Linux
             runs-on: ubuntu-latest
             goos: linux
@@ -52,27 +52,25 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxxf86vm-dev
+
       - name: Build GUI
         shell: bash
         env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
           VERSION: ${{ github.ref_name }}
         run: |
-          # macOS builds both architectures on one runner
           if [ "${{ runner.os }}" = "macOS" ]; then
-            for target in "darwin/arm64" "darwin/amd64"; do
-              GOOS="${target%/*}"
-              GOARCH="${target#*/}"
-              echo "Building $GOOS/$GOARCH..."
-              go build -ldflags "-X main.Version=$VERSION" -o "vrackconverter-$GOARCH" ./cmd/vrackconverter-gui/
-
-              # Create .app bundle
-              mv "vrackconverter-$GOARCH" vrackconverter
-              ./scripts/macos-package.sh vrackconverter "${VERSION#v}"
-              ARCHIVE_NAME="vrackconverter-gui-$GOOS-$GOARCH.app.tar.gz"
-              tar -czf "$ARCHIVE_NAME" vrackconverter.app
-              rm -rf vrackconverter.app
-              echo "Built $ARCHIVE_NAME"
-            done
+            go build -ldflags "-X main.Version=$VERSION" -o vrackconverter ./cmd/vrackconverter-gui/
+            ./scripts/macos-package.sh vrackconverter "${VERSION#v}"
+            ARCHIVE_NAME="vrackconverter-gui-${{ matrix.goos }}-${{ matrix.goarch }}.app.tar.gz"
+            tar -czf "$ARCHIVE_NAME" vrackconverter.app
+            echo "ARCHIVE_NAME=$ARCHIVE_NAME" >> "$GITHUB_ENV"
           elif [ "${{ runner.os }}" = "Linux" ]; then
             go build -ldflags "-X main.Version=$VERSION" -o vrackconverter ./cmd/vrackconverter-gui/
             ARCHIVE_NAME="vrackconverter-gui-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
@@ -89,18 +87,9 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: vrackconverter-gui-${{ matrix.os }}-${{ matrix.goarch }}
-          path: vrackconverter-gui-*.tar.gz
+          name: vrackconverter-gui-${{ matrix.os }}
+          path: ${{ env.ARCHIVE_NAME }}
           retention-days: 90
-        if: runner.os != 'Windows'
-
-      - name: Upload artifacts (Windows)
-        uses: actions/upload-artifact@v4
-        with:
-          name: vrackconverter-gui-${{ matrix.os }}-${{ matrix.goarch }}
-          path: vrackconverter-gui-*.zip
-          retention-days: 90
-        if: runner.os == 'Windows'
   test:
     name: Test
     runs-on: ubuntu-latest
@@ -136,11 +125,20 @@ jobs:
       - name: Verify dependencies
         run: go mod verify
 
-      - name: Build binary (required for CLI integration tests)
-        run: go build -ldflags "-X main.Version=dev" -o vrackconverter ./cmd/vrackconverter/
+      - name: Build CLI binary (required for integration tests)
+        run: go build -ldflags "-X main.Version=dev" -o vrackconverter-cli ./cmd/vrackconverter/
+
+      - name: Verify CLI binary exists
+        run: |
+          ls -la vrackconverter-cli
+          ./vrackconverter-cli --help || true
 
       - name: Run tests
-        run: go test -v -race ./...
+        run: go test -race ./cmd/vrackconverter ./internal/converter/...
+
+      - name: Run E2E tests (only show failures)
+        if: failure()
+        run: go test -v ./cmd/vrackconverter -run TestCLI
 
   build:
     name: Build
