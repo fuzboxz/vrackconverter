@@ -10,7 +10,7 @@ import (
 	"vrackconverter/internal/converter"
 )
 
-// binPath returns the absolute path to the vrackconverter binary
+// binPath returns the absolute path to the vrackconverter-cli binary
 func binPath(t *testing.T) string {
 	// Get the directory containing this test file
 	testDir, err := os.Getwd()
@@ -19,7 +19,7 @@ func binPath(t *testing.T) string {
 	}
 	// Navigate up: cmd/vrackconverter -> vrackconverter (project root)
 	// Use absolute path since tests run from temp directories
-	relPath := filepath.Join(testDir, "..", "..", "vrackconverter")
+	relPath := filepath.Join(testDir, "..", "..", "vrackconverter-cli")
 	absPath, err := filepath.Abs(relPath)
 	if err != nil {
 		t.Fatal(err)
