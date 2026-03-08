@@ -8,7 +8,12 @@ CMD_DIR=./cmd/vrackconverter
 GUI_CMD_DIR=./cmd/vrackconverter-gui
 BUILD_DIR=./build
 VERSION?=dev
-LDFLAGS:=-ldflags "-X main.Version=$(VERSION)"
+BUILD_TIME=$(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
+GIT_COMMIT=$(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+GOOS=$(shell go env GOOS)
+GOARCH=$(shell go env GOARCH)
+BUILD_INFO=$(GOOS)$(GOARCH)@$(VERSION) $(GIT_COMMIT)
+LDFLAGS:=-ldflags "-X main.Version=$(VERSION) -X 'main.BuildInfo=$(BUILD_INFO)'"
 
 # Go parameters
 GOCMD=go

@@ -31,7 +31,7 @@ func (g *ConverterGUI) StartConversion() {
 	for path := range g.fileStatuses {
 		g.fileStatuses[path] = &FileStatus{
 			Status:  "Ready",
-			Icon:    "✓",
+			Icon:    StatusReady,
 			Message: "Converting...",
 		}
 	}
@@ -69,19 +69,19 @@ func (g *ConverterGUI) runConversion(files []string) {
 		if result.Error != nil {
 			g.fileStatuses[inputPath] = &FileStatus{
 				Status:  "Error",
-				Icon:    "❌",
+				Icon:    StatusError,
 				Message: result.Error.Error(),
 			}
 		} else if result.Skipped {
 			g.fileStatuses[inputPath] = &FileStatus{
 				Status:  "Skipped",
-				Icon:    "⊘",
+				Icon:    StatusSkipped,
 				Message: "Already in target format",
 			}
 		} else {
 			g.fileStatuses[inputPath] = &FileStatus{
 				Status:  "Converted",
-				Icon:    "✓",
+				Icon:    StatusConverted,
 				Message: "Successfully converted",
 			}
 		}

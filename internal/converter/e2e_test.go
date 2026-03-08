@@ -17,7 +17,7 @@ func TestE2E_AllConversions(t *testing.T) {
 	t.Log("E2E tests ran on the following files:")
 	for _, fixture := range allFixtures {
 		fullPath := filepath.Join(testFixtureDir, fixture.filename)
-		sourceFormat := detectFormat(fullPath)
+		sourceFormat, _ := DetectFormatFromPath(fullPath)
 		t.Logf("  - %s (%s)", fixture.filename, sourceFormat)
 	}
 
@@ -25,7 +25,7 @@ func TestE2E_AllConversions(t *testing.T) {
 		t.Run(fixture.filename, func(t *testing.T) {
 			// Auto-detect source format
 			fullPath := filepath.Join(testFixtureDir, fixture.filename)
-			sourceFormat := detectFormat(fullPath)
+			sourceFormat, _ := DetectFormatFromPath(fullPath)
 
 			if sourceFormat.IsUnknown() {
 				t.Skipf("Unable to detect format for %s", fixture.filename)
@@ -247,7 +247,7 @@ func TestE2E_FormatDetection(t *testing.T) {
 	for filename, expectedFormat := range expectedFormats {
 		t.Run(filename, func(t *testing.T) {
 			fullPath := filepath.Join(testFixtureDir, filename)
-			actualFormat := detectFormat(fullPath)
+			actualFormat, _ := DetectFormatFromPath(fullPath)
 
 			if actualFormat != expectedFormat {
 				t.Errorf("Expected format %s, got %s", expectedFormat, actualFormat)

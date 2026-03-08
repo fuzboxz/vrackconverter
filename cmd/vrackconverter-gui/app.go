@@ -57,24 +57,28 @@ type ConverterGUI struct {
 	mu                sync.RWMutex
 
 	// UI widgets - Left Column
-	fileList  *widget.List
-	addBtn    *widget.Button
-	removeBtn *widget.Button
-	clearBtn  *widget.Button
-	logWidget *widget.Entry
+	fileList   *widget.List
+	addBtn     *widget.Button
+	removeBtn  *widget.Button
+	clearBtn   *widget.Button
+	logWidget  *widget.Entry
+	dndOverlay *fyne.Container
+
+	// Status bar
+	statusBarOutput *widget.Label
 
 	// UI widgets - Right Column (Global Settings)
 	formatSelect    *widget.Select
 	metaModuleCheck *widget.Check
 	overwriteCheck  *widget.Check
-	outputDirEntry  *widget.Entry
 	browseBtn       *widget.Button
 
 	// UI widgets - Right Column (Patch Inspector)
-	inspectorFileName *widget.Label
-	inspectorOverview *widget.Label
-	inspectorContents *widget.RichText
-	inspectorStatus   *widget.Label
+	inspectorFileName          *widget.Label
+	inspectorOverview          *widget.Label
+	inspectorContents          *widget.Label
+	inspectorStatus            *widget.Label
+	inspectorContentsContainer *fyne.Container
 
 	// UI widgets - Right Column (Convert button)
 	convertBtn  *widget.Button
@@ -126,11 +130,14 @@ func (g *ConverterGUI) EnableDragAndDrop() {
 		var paths []string
 		for _, uri := range uris {
 			path := uri.Path()
-			// Check if it's a file we can process
+			// Check if it's a patch file (.vcv) or MiRack bundle (.mrk directory)
 			if g.isPatchFile(path) {
 				paths = append(paths, path)
+			} else if g.isMiRackBundle(path) {
+				// .mrk directories are patch files themselves
+				paths = append(paths, path)
 			} else if g.isDirectory(path) {
-				// If it's a directory, add all patch files inside
+				// If it's a regular directory, search inside for patch files
 				dirFiles := g.getPatchFilesInDir(path)
 				paths = append(paths, dirFiles...)
 			}
@@ -141,10 +148,25 @@ func (g *ConverterGUI) EnableDragAndDrop() {
 	})
 }
 
-// isPatchFile checks if a file is a supported patch file
+// isPatchFile checks if a file is a supported patch file (.vcv)
 func (g *ConverterGUI) isPatchFile(path string) bool {
+	// Check if it's a regular file with .vcv extension
 	ext := strings.ToLower(filepath.Ext(path))
-	return ext == ".vcv" || ext == ".mrk"
+	return ext == ".vcv"
+}
+
+// isMiRackBundle checks if a path is a MiRack .mrk bundle directory
+func (g *ConverterGUI) isMiRackBundle(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	if !info.IsDir() {
+		return false
+	}
+	// Check if directory name ends with .mrk
+	base := filepath.Base(path)
+	return strings.HasSuffix(strings.ToLower(base), ".mrk")
 }
 
 // isDirectory checks if a path is a directory
@@ -204,10 +226,10 @@ func (g *ConverterGUI) AddFiles(paths []string) {
 		}
 		if !alreadyExists {
 			g.inputFiles = append(g.inputFiles, path)
-			// Initialize file status
+			// Initialize file status with text-based indicator
 			g.fileStatuses[path] = &FileStatus{
 				Status:  "Ready",
-				Icon:    "✓",
+				Icon:    StatusReady,
 				Message: "Ready to convert",
 			}
 			added++
@@ -216,6 +238,7 @@ func (g *ConverterGUI) AddFiles(paths []string) {
 
 	if added > 0 {
 		g.updateFileListUI()
+		g.updateDndOverlay()
 		g.Log(fmt.Sprintf("Added %d file(s). Ready.", added))
 	}
 }
@@ -231,6 +254,7 @@ func (g *ConverterGUI) ClearFiles() {
 	g.results = []converter.Result{}
 	g.selectedFileIndex = -1
 	g.updateFileListUI()
+	g.updateDndOverlay()
 	g.updateInspector(nil)
 	g.Log(fmt.Sprintf("Cleared %d file(s).", count))
 }
@@ -243,7 +267,8 @@ func (g *ConverterGUI) SelectOutputDirectory() {
 		}
 		path := uri.Path()
 		g.outputDir = path
-		g.outputDirEntry.SetText(path)
+		g.updateStatusBar()
+		g.Log(fmt.Sprintf("Output directory: %s", path))
 	}, g.window)
 
 	d.Show()
@@ -301,13 +326,13 @@ func (g *ConverterGUI) GetFileCount() int {
 	return len(g.inputFiles)
 }
 
-// detectFormatFromPath detects the format of a file by its extension
+// detectFormatFromPath detects the format of a file by reading it
 func (g *ConverterGUI) detectFormatFromPath(path string) converter.Format {
-	data, err := os.ReadFile(path)
+	_, format, err := converter.DetectInputFormat(path)
 	if err != nil {
 		return converter.FormatUnknown
 	}
-	return converter.DetectFormat(path, data)
+	return format
 }
 
 // getOutputPath generates the output path for an input file
@@ -426,33 +451,55 @@ func (g *ConverterGUI) updateInspector(info *PatchInfo) {
 	if info == nil {
 		g.inspectorFileName.SetText("No file selected")
 		g.inspectorOverview.SetText("")
-		g.inspectorContents.Segments = []widget.RichTextSegment{}
+		g.inspectorContents.SetText("")
 		g.inspectorStatus.SetText("")
-		g.inspectorContents.Refresh()
+		// Hide contents section when no file selected
+		if g.inspectorContentsContainer != nil {
+			g.inspectorContentsContainer.Hide()
+		}
 		return
 	}
 
 	g.inspectorFileName.SetText(info.FileName)
 	g.inspectorOverview.SetText(fmt.Sprintf("Overview: %d Modules | %d Cables", info.ModuleCount, info.CableCount))
 
-	// Build module list
-	var segments []widget.RichTextSegment
+	// Build module list as simple text - each item on its own line
 	if len(info.Modules) > 0 {
+		var lines []string
 		for _, mod := range info.Modules {
-			text := fmt.Sprintf("• %s", mod.Name)
+			text := mod.Name
 			if mod.Count > 1 {
-				text = fmt.Sprintf("• %s (x%d)", mod.Name, mod.Count)
+				text = fmt.Sprintf("%s (x%d)", mod.Name, mod.Count)
 			}
-			segments = append(segments, &widget.TextSegment{Text: text})
-			segments = append(segments, &widget.TextSegment{Text: "\n"})
+			lines = append(lines, text)
 		}
+		g.inspectorContents.SetText(strings.Join(lines, "\n"))
+	} else {
+		g.inspectorContents.SetText("No modules found")
 	}
-	g.inspectorContents.Segments = segments
-	g.inspectorContents.Refresh()
 
-	// Update status
-	statusText := info.StatusIcon + " " + info.StatusNote
-	g.inspectorStatus.SetText(statusText)
+	// Show contents section when file is selected
+	if g.inspectorContentsContainer != nil {
+		g.inspectorContentsContainer.Show()
+	}
+
+	// Update status - use text-based status indicators
+	var statusIcon string
+	switch info.Status {
+	case "Ready":
+		statusIcon = StatusReady
+	case "Warn":
+		statusIcon = StatusWarn
+	case "Error":
+		statusIcon = StatusError
+	case "Skipped":
+		statusIcon = StatusSkipped
+	case "Converted":
+		statusIcon = StatusConverted
+	default:
+		statusIcon = StatusReady
+	}
+	g.inspectorStatus.SetText(statusIcon + " " + info.StatusNote)
 }
 
 // GetPatchInfo reads and parses a patch file
@@ -460,48 +507,24 @@ func (g *ConverterGUI) GetPatchInfo(path string) PatchInfo {
 	info := PatchInfo{
 		FileName:   filepath.Base(path),
 		Status:     "Ready",
-		StatusIcon: "✓",
+		StatusIcon: StatusReady,
 		StatusNote: "All modules supported.",
 	}
 
-	// Detect format first
-	data, err := os.ReadFile(path)
+	// Use common utility to detect format and read data
+	data, _, err := converter.DetectInputFormat(path)
 	if err != nil {
 		info.Status = "Error"
-		info.StatusIcon = "❌"
-		info.StatusNote = fmt.Sprintf("Cannot read file: %v", err)
+		info.StatusIcon = StatusError
+		info.StatusNote = fmt.Sprintf("Cannot read patch: %v", err)
 		return info
 	}
 
-	format := converter.DetectFormat(path, data)
-
-	// For MiRack format (.mrk directories), read the patch.json inside
-	var patchData map[string]any
-	if format == converter.FormatMiRack {
-		patchJSONPath := filepath.Join(path, "patch.json")
-		data, err = os.ReadFile(patchJSONPath)
-		if err != nil {
-			info.Status = "Error"
-			info.StatusIcon = "❌"
-			info.StatusNote = fmt.Sprintf("Cannot read patch.json: %v", err)
-			return info
-		}
-	} else if format == converter.FormatVCV2 || format == converter.FormatVCV06 {
-		// Extract JSON from v2/v0.6 archives
-		jsonData, err := converter.ExtractJSONFromV2(path)
-		if err != nil {
-			info.Status = "Error"
-			info.StatusIcon = "❌"
-			info.StatusNote = fmt.Sprintf("Cannot extract patch data: %v", err)
-			return info
-		}
-		data = jsonData
-	}
-
 	// Parse JSON
+	var patchData map[string]any
 	if err := json.Unmarshal(data, &patchData); err != nil {
 		info.Status = "Error"
-		info.StatusIcon = "❌"
+		info.StatusIcon = StatusError
 		info.StatusNote = fmt.Sprintf("Cannot parse patch: %v", err)
 		return info
 	}
@@ -510,7 +533,7 @@ func (g *ConverterGUI) GetPatchInfo(path string) PatchInfo {
 	modulesVal, hasModules := patchData["modules"]
 	if !hasModules {
 		info.Status = "Warn"
-		info.StatusIcon = "⚠️"
+		info.StatusIcon = StatusWarn
 		info.StatusNote = "No modules found in patch."
 		return info
 	}
@@ -518,7 +541,7 @@ func (g *ConverterGUI) GetPatchInfo(path string) PatchInfo {
 	modulesArray, ok := modulesVal.([]any)
 	if !ok {
 		info.Status = "Warn"
-		info.StatusIcon = "⚠️"
+		info.StatusIcon = StatusWarn
 		info.StatusNote = "Invalid modules data."
 		return info
 	}
@@ -574,7 +597,7 @@ func (g *ConverterGUI) GetPatchInfo(path string) PatchInfo {
 	// Check for any warnings
 	if info.ModuleCount == 0 {
 		info.Status = "Warn"
-		info.StatusIcon = "⚠️"
+		info.StatusIcon = StatusWarn
 		info.StatusNote = "No modules found in patch."
 	}
 
@@ -605,6 +628,7 @@ func (g *ConverterGUI) RemoveSelected() {
 	}
 
 	g.updateFileListUI()
+	g.updateDndOverlay()
 
 	// Update inspector
 	if g.selectedFileIndex >= 0 {

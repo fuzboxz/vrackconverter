@@ -50,7 +50,7 @@ func TestDetectFormat_MiRackBundle(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			actualFmt := detectFormat(tt.path)
+			actualFmt, _ := DetectFormatFromPath(tt.path)
 			if actualFmt != tt.expectedFmt {
 				t.Errorf("Expected %v, got %v", tt.expectedFmt, actualFmt)
 			}
@@ -238,7 +238,7 @@ func TestDetectInputFormat(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, actualFmt, err := detectInputFormat(tt.path)
+			_, actualFmt, err := DetectInputFormat(tt.path)
 			if err != nil {
 				t.Fatalf("Failed to detect format: %v", err)
 			}
