@@ -12,6 +12,95 @@ permissions:
   contents: read
 
 jobs:
+  # GUI build jobs (require platform-specific runners for CGO)
+  build-gui:
+    name: Build GUI (${{ matrix.os }})
+    runs-on: ${{ matrix.runs-on }}
+    # Only run on canonical repo for releases
+    if: github.repository == 'fuzboxz/vrackconverter' && startsWith(github.ref, 'refs/tags/v')
+    strategy:
+      matrix:
+        include:
+          # macOS runner builds both arm64 (native) and amd64 (cross-compile)
+          - os: macOS
+            runs-on: macos-latest
+            targets:
+              - goos: darwin
+                goarch: arm64
+              - goos: darwin
+                goarch: amd64
+          - os: Linux
+            runs-on: ubuntu-latest
+            goos: linux
+            goarch: amd64
+          - os: Windows
+            runs-on: windows-latest
+            goos: windows
+            goarch: amd64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache: false
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build GUI
+        shell: bash
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          # macOS builds both architectures on one runner
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            for target in "darwin/arm64" "darwin/amd64"; do
+              GOOS="${target%/*}"
+              GOARCH="${target#*/}"
+              echo "Building $GOOS/$GOARCH..."
+              go build -ldflags "-X main.Version=$VERSION" -o "vrackconverter-$GOARCH" ./cmd/vrackconverter-gui/
+
+              # Create .app bundle
+              mv "vrackconverter-$GOARCH" vrackconverter
+              ./scripts/macos-package.sh vrackconverter "${VERSION#v}"
+              ARCHIVE_NAME="vrackconverter-gui-$GOOS-$GOARCH.app.tar.gz"
+              tar -czf "$ARCHIVE_NAME" vrackconverter.app
+              rm -rf vrackconverter.app
+              echo "Built $ARCHIVE_NAME"
+            done
+          elif [ "${{ runner.os }}" = "Linux" ]; then
+            go build -ldflags "-X main.Version=$VERSION" -o vrackconverter ./cmd/vrackconverter-gui/
+            ARCHIVE_NAME="vrackconverter-gui-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
+            tar -czf "$ARCHIVE_NAME" vrackconverter
+            echo "ARCHIVE_NAME=$ARCHIVE_NAME" >> "$GITHUB_ENV"
+          else
+            # Windows
+            go build -ldflags "-X main.Version=$VERSION" -o vrackconverter.exe ./cmd/vrackconverter-gui/
+            ARCHIVE_NAME="vrackconverter-gui-${{ matrix.goos }}-${{ matrix.goarch }}.zip"
+            7z a -tzip "$ARCHIVE_NAME" vrackconverter.exe
+            echo "ARCHIVE_NAME=$ARCHIVE_NAME" >> "$GITHUB_ENV"
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: vrackconverter-gui-${{ matrix.os }}-${{ matrix.goarch }}
+          path: vrackconverter-gui-*.tar.gz
+          retention-days: 90
+        if: runner.os != 'Windows'
+
+      - name: Upload artifacts (Windows)
+        uses: actions/upload-artifact@v4
+        with:
+          name: vrackconverter-gui-${{ matrix.os }}-${{ matrix.goarch }}
+          path: vrackconverter-gui-*.zip
+          retention-days: 90
+        if: runner.os == 'Windows'
   test:
     name: Test
     runs-on: ubuntu-latest
@@ -126,6 +215,7 @@ jobs:
     needs:
       - test
       - build
+      - build-gui
     permissions:
       contents: write
     steps:
@@ -154,18 +244,39 @@ jobs:
         run: |
           PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
 
-          echo "## What's Changed" > "$NOTES_FILE"
+          echo "## vRackConverter ${{ github.ref_name }}" > "$NOTES_FILE"
+          echo "" >> "$NOTES_FILE"
+          echo "### What's Changed" >> "$NOTES_FILE"
           echo "" >> "$NOTES_FILE"
           if [ -n "$PREV_TAG" ]; then
             git log "$PREV_TAG..HEAD" --pretty=format:"- %s" --no-merges | grep -vi 'claude' >> "$NOTES_FILE" || true
           else
             echo "- Initial release" >> "$NOTES_FILE"
           fi
+          echo "" >> "$NOTES_FILE"
+          echo "### Downloads" >> "$NOTES_FILE"
+          echo "" >> "$NOTES_FILE"
+          echo "**CLI** (`vrackconverter`): Command-line interface for automation and scripting" >> "$NOTES_FILE"
+          echo "" >> "$NOTES_FILE"
+          echo "**GUI** (`vrackconverter-gui`): Desktop application with drag-and-drop interface" >> "$NOTES_FILE"
+          echo "" >> "$NOTES_FILE"
+          echo "Choose the appropriate file for your platform:" >> "$NOTES_FILE"
+          echo "- macOS: `vrackconverter-gui-darwin-*.app.tar.gz` (GUI) or `vrackconverter-darwin-*.tar.gz` (CLI)" >> "$NOTES_FILE"
+          echo "- Linux: `vrackconverter-gui-linux-*.tar.gz` (GUI) or `vrackconverter-linux-*.tar.gz` (CLI)" >> "$NOTES_FILE"
+          echo "- Windows: `vrackconverter-gui-windows-*.zip` (GUI) or `vrackconverter-windows-*.zip` (CLI)" >> "$NOTES_FILE"
 
           cat "$NOTES_FILE"
 
+          # Detect pre-release tags (contain beta, rc, or alpha)
+          if [[ "${{ github.ref_name }}" =~ -(beta|rc|alpha) ]]; then
+            PRERELEASE_FLAG="--prerelease"
+          else
+            PRERELEASE_FLAG=""
+          fi
+
           gh release create '${{ github.ref_name }}' \
             --notes-file "$NOTES_FILE" \
+            $PRERELEASE_FLAG \
             -- \
             artifacts/**/*.tar.gz \
             artifacts/**/*.zip \

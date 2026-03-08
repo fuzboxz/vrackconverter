@@ -46,17 +46,52 @@ run: build
 	@echo "Running $(BINARY_NAME)..."
 	./$(BINARY_NAME)
 
-# Package macOS app bundle
+# Fyne packaging configuration
+# fyne package requires x.y.z format (no non-numeric suffixes)
+# Note: Current fyne CLI (v1.7.0) has compatibility issues with fyne library v2.4.5
+# Using custom macOS packaging script as fallback
+FYNE_VERSION=$(shell echo $(VERSION) | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$$' && echo $(VERSION) || echo "1.0.0")
+FYNE_ID=com.vrackconverter.app
+FYNE_NAME=vRackConverter
+
+# Package for current platform (uses macOS script for darwin, raw binary for others)
 .PHONY: package
 package: build
-	@echo "Packaging $(BINARY_NAME).app..."
-	@./scripts/macos-package.sh $(BINARY_NAME) $(VERSION)
-
-# Build for all platforms
-.PHONY: build-all
-build-all:
-	@echo "Building for all platforms..."
+	@echo "Packaging $(BINARY_NAME) for $(GOOS)/$(GOARCH)..."
 	@mkdir -p $(BUILD_DIR)
+	@if [ "$(GOOS)" = "darwin" ]; then \
+		echo "  Creating macOS .app bundle..."; \
+		./scripts/macos-package.sh $(BINARY_NAME) $(FYNE_VERSION); \
+		tar -czf $(BUILD_DIR)/vrackconverter-$(GOOS)-$(GOARCH).app.tar.gz $(BINARY_NAME).app; \
+		rm -rf $(BINARY_NAME).app; \
+		echo "  Package complete: $(BUILD_DIR)/vrackconverter-$(GOOS)-$(GOARCH).app.tar.gz"; \
+	elif [ "$(GOOS)" = "windows" ]; then \
+		echo "  Creating Windows package..."; \
+		zip -q $(BUILD_DIR)/vrackconverter-$(GOOS)-$(GOARCH).zip $(BINARY_NAME).exe; \
+		echo "  Package complete: $(BUILD_DIR)/vrackconverter-$(GOOS)-$(GOARCH).zip"; \
+	else \
+		echo "  Creating tarball..."; \
+		tar -czf $(BUILD_DIR)/vrackconverter-$(GOOS)-$(GOARCH).tar.gz $(BINARY_NAME); \
+		echo "  Package complete: $(BUILD_DIR)/vrackconverter-$(GOOS)-$(GOARCH).tar.gz"; \
+	fi
+
+# Package for all platforms
+# Note: Fyne GUI requires CGO, so full cross-compilation needs proper toolchains.
+# This target builds CLI for all platforms and GUI for current platform only.
+.PHONY: package-all
+package-all:
+	@echo "Building packages for all platforms..."
+	@mkdir -p $(BUILD_DIR)
+	@echo "Building CLI for all platforms..."
+	@$(MAKE) -C . build-cli-all
+	@echo "Packaging GUI for current platform..."
+	@$(MAKE) package
+	@echo "Packages complete in $(BUILD_DIR)/"
+	@echo "Note: Cross-platform GUI packaging requires running 'make package' on each target platform"
+
+# Build CLI for all platforms (no CGO dependency)
+.PHONY: build-cli-all
+build-cli-all:
 	@echo "Building CLI linux/amd64..."
 	GOOS=linux GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/vrackconverter-cli-linux-amd64 $(CLI_CMD_DIR)
 	tar -czf $(BUILD_DIR)/vrackconverter-cli-linux-amd64.tar.gz -C $(BUILD_DIR) vrackconverter-cli-linux-amd64
@@ -75,19 +110,12 @@ build-all:
 	@echo "Building CLI windows/arm64..."
 	GOOS=windows GOARCH=arm64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/vrackconverter-cli-windows-arm64.exe $(CLI_CMD_DIR)
 	cd $(BUILD_DIR) && zip -q vrackconverter-cli-windows-arm64.zip vrackconverter-cli-windows-arm64.exe
-	@echo "Building GUI darwin/arm64..."
-	GOOS=darwin GOARCH=arm64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/vrackconverter-darwin-arm64 $(CMD_DIR)
-	tar -czf $(BUILD_DIR)/vrackconverter-darwin-arm64.tar.gz -C $(BUILD_DIR) vrackconverter-darwin-arm64
-	@echo "Building GUI darwin/amd64..."
-	GOOS=darwin GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/vrackconverter-darwin-amd64 $(CMD_DIR)
-	tar -czf $(BUILD_DIR)/vrackconverter-darwin-amd64.tar.gz -C $(BUILD_DIR) vrackconverter-darwin-amd64
-	@echo "Building GUI linux/amd64..."
-	GOOS=linux GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/vrackconverter-linux-amd64 $(CMD_DIR)
-	tar -czf $(BUILD_DIR)/vrackconverter-linux-amd64.tar.gz -C $(BUILD_DIR) vrackconverter-linux-amd64
-	@echo "Building GUI windows/amd64..."
-	GOOS=windows GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/vrackconverter-windows-amd64.exe $(CMD_DIR)
-	cd $(BUILD_DIR) && zip -q vrackconverter-windows-amd64.zip vrackconverter-windows-amd64.exe
-	@echo "All builds complete in $(BUILD_DIR)/"
+	@echo "CLI builds complete in $(BUILD_DIR)/"
+
+# Build for all platforms
+# Note: GUI builds require CGO and are platform-specific, so this only builds CLI
+.PHONY: build-all
+build-all: build-cli-all
 
 # Run tests (shows only failed tests by default)
 .PHONY: test
@@ -161,8 +189,9 @@ help:
 	@echo "  all           Run fmt, vet, test, and build (default)"
 	@echo "  build         Build GUI for current platform"
 	@echo "  build-cli     Build CLI for current platform"
-	@echo "  build-all     Build GUI and CLI for all platforms (linux, darwin, windows)"
-	@echo "  package       Package macOS .app bundle (GUI with icon)"
+	@echo "  build-all     Build CLI for all platforms (GUI requires CGO, run on each platform)"
+	@echo "  package       Package GUI for current platform (macOS .app, Linux/Windows tarball)"
+	@echo "  package-all   Build CLI for all platforms + GUI package for current platform"
 	@echo "  run           Build and run the GUI application"
 	@echo "  test          Run tests (shows only failures)"
 	@echo "  fmt           Format Go code"
@@ -181,7 +210,10 @@ help:
 	@echo "  make build"
 	@echo "  make build-cli"
 	@echo "  make package"
+	@echo "  make package-all"
 	@echo "  make run"
 	@echo "  VERSION=1.0.0 make build"
-	@echo "  make build-all"
 	@echo "  make test"
+	@echo ""
+	@echo "Note: GUI packaging requires CGO. For cross-platform releases,"
+	@echo "      run 'make package' on each target platform (macOS, Linux, Windows)."
