@@ -46,6 +46,12 @@ run: build
 	@echo "Running $(BINARY_NAME)..."
 	./$(BINARY_NAME)
 
+# Package macOS app bundle
+.PHONY: package
+package: build
+	@echo "Packaging $(BINARY_NAME).app..."
+	@./scripts/macos-package.sh $(BINARY_NAME) $(VERSION)
+
 # Build for all platforms
 .PHONY: build-all
 build-all:
@@ -156,6 +162,7 @@ help:
 	@echo "  build         Build GUI for current platform"
 	@echo "  build-cli     Build CLI for current platform"
 	@echo "  build-all     Build GUI and CLI for all platforms (linux, darwin, windows)"
+	@echo "  package       Package macOS .app bundle (GUI with icon)"
 	@echo "  run           Build and run the GUI application"
 	@echo "  test          Run tests (shows only failures)"
 	@echo "  fmt           Format Go code"
@@ -173,6 +180,7 @@ help:
 	@echo "Examples:"
 	@echo "  make build"
 	@echo "  make build-cli"
+	@echo "  make package"
 	@echo "  make run"
 	@echo "  VERSION=1.0.0 make build"
 	@echo "  make build-all"
