@@ -87,7 +87,7 @@ func ConvertFile(inputPath, outputPath string, opts Options) Result {
 	}
 
 	// Detect input format
-	inputData, inputFmt, err := detectInputFormat(inputPath)
+	inputData, inputFmt, err := DetectInputFormat(inputPath)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to detect input format: %w", err)
 		return result
@@ -209,8 +209,8 @@ func ConvertFile(inputPath, outputPath string, opts Options) Result {
 	return result
 }
 
-// detectInputFormat detects the format of the input file and returns the data and format.
-func detectInputFormat(inputPath string) ([]byte, Format, error) {
+// DetectInputFormat detects the format of the input file and returns the data and format.
+func DetectInputFormat(inputPath string) ([]byte, Format, error) {
 	// Check file extension first - .mrk bundles are MiRack format
 	ext := strings.ToLower(filepath.Ext(inputPath))
 	if ext == ".mrk" {

@@ -11,6 +11,8 @@ import (
 var (
 	// Version is injected by build
 	Version = "dev"
+	// BuildInfo is injected by build
+	BuildInfo = "dev build"
 )
 
 func main() {
@@ -19,7 +21,7 @@ func main() {
 
 	gui := NewConverterGUI(fyneApp)
 
-	window := fyneApp.NewWindow("RackConverter v" + Version)
+	window := fyneApp.NewWindow("vRackConverter - " + Version)
 	gui.SetWindow(window)
 	window.SetContent(gui.MakeUI())
 

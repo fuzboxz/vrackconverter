@@ -9,6 +9,7 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/storage"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"vrackconverter/internal/converter"
@@ -22,66 +23,71 @@ const (
 	minButtonHeight    = 36
 )
 
+// Status indicators - use ASCII for compatibility
+const (
+	StatusReady     = "[OK]"
+	StatusWarn      = "[!]"
+	StatusError     = "[X]"
+	StatusSkipped   = "[--]"
+	StatusConverted = "[OK]"
+)
+
 // createMainLayout creates the main two-panel layout
 func (g *ConverterGUI) createMainLayout() *fyne.Container {
 	// Create menu bar
 	g.createMenuBar()
 
-	// Left column: Input Queue (top) + Log (bottom)
+	// Left column: Input Queue (top) + Log (middle) + Output controls (bottom)
 	leftColumn := g.createLeftColumn()
 
-	// Right column: Global Settings (top) + Patch Inspector (middle) + Convert button (bottom)
+	// Right column: Global Settings (top) + Patch Inspector (middle) + Convert button + version (bottom)
 	rightColumn := g.createRightColumn()
 	rightColumn.Resize(fyne.NewSize(minSidebarWidth, rightColumn.MinSize().Height))
 
 	// Use HSplit for resizable panels with proper ratio
-	// The split will maintain the ratio and allow user adjustment
 	split := container.NewHSplit(leftColumn, rightColumn)
 	split.SetOffset(0.7) // Left panel gets 70%, right gets 30%
 
 	return container.NewBorder(nil, nil, nil, nil, split)
 }
 
-// createLeftColumn creates the left column with Input Queue and Log
+// createLeftColumn creates the left column with Input Queue, Log, and Output controls
 func (g *ConverterGUI) createLeftColumn() *fyne.Container {
-	// INPUT QUEUE header and buttons
-	inputHeader := widget.NewRichTextFromMarkdown("### INPUT QUEUE")
-	inputHeader.Resize(fyne.NewSize(200, 30))
-
-	g.addBtn = widget.NewButton(" + Add", func() {
+	g.addBtn = widget.NewButton("Add +", func() {
 		g.showAddFilesDialog()
 	})
 	g.addBtn.Importance = widget.MediumImportance
-	g.addBtn.Resize(fyne.NewSize(100, minButtonHeight))
 
-	g.removeBtn = widget.NewButton(" - Remove", func() {
+	g.removeBtn = widget.NewButton("Remove -", func() {
 		g.RemoveSelected()
 	})
 	g.removeBtn.Disable()
-	g.removeBtn.Resize(fyne.NewSize(100, minButtonHeight))
 
-	g.clearBtn = widget.NewButton(" x Clear", func() {
+	g.clearBtn = widget.NewButton("Clear x", func() {
 		g.ClearFiles()
 	})
 	g.clearBtn.Disable()
-	g.clearBtn.Resize(fyne.NewSize(100, minButtonHeight))
 
 	buttonRow := container.NewGridWithColumns(3, g.addBtn, g.removeBtn, g.clearBtn)
 
-	// File list with custom widget showing file name and status
+	// File list with status icon on left (fixed width), file name on right
 	g.fileList = widget.NewList(
 		func() int {
 			return len(g.inputFiles)
 		},
 		func() fyne.CanvasObject {
-			// Template for list items with minimum height
+			// Template: status icon on left (fixed width), file name on right
+			statusIcon := widget.NewLabel(StatusReady)
+			statusIcon.Alignment = fyne.TextAlignLeading
+			statusIcon.Resize(fyne.NewSize(50, 32))
+
 			fileNameLabel := widget.NewLabel("FileName.vcv")
 			fileNameLabel.TextStyle = fyne.TextStyle{Bold: true}
-			statusLabel := widget.NewLabel("[Ready]")
 
-			row := container.NewGridWithColumns(2,
+			// Use HBox with fixed-width status column
+			row := container.NewHBox(
+				container.NewVBox(statusIcon),
 				fileNameLabel,
-				statusLabel,
 			)
 			row.Resize(fyne.NewSize(200, 32))
 			return row
@@ -90,21 +96,38 @@ func (g *ConverterGUI) createLeftColumn() *fyne.Container {
 			if id >= 0 && id < len(g.inputFiles) {
 				path := g.inputFiles[id]
 				name := filepath.Base(path)
-				grid := obj.(*fyne.Container)
+				hbox := obj.(*fyne.Container)
 
-				// Get file name label
-				nameLabel := grid.Objects[0].(*widget.Label)
+				// Status icon (left, fixed width)
+				statusContainer := hbox.Objects[0].(*fyne.Container)
+				statusLabel := statusContainer.Objects[0].(*widget.Label)
+
+				// File name (right)
+				nameLabel := hbox.Objects[1].(*widget.Label)
 				nameLabel.Text = name
-				nameLabel.Refresh()
 
-				// Get status label
-				statusLabel := grid.Objects[1].(*widget.Label)
+				// Set status icon based on file status
 				if status, ok := g.fileStatuses[path]; ok {
-					statusLabel.Text = fmt.Sprintf("[%s %s]", status.Icon, status.Status)
+					switch status.Status {
+					case "Ready":
+						statusLabel.Text = StatusReady
+					case "Warn":
+						statusLabel.Text = StatusWarn
+					case "Error":
+						statusLabel.Text = StatusError
+					case "Skipped":
+						statusLabel.Text = StatusSkipped
+					case "Converted":
+						statusLabel.Text = StatusConverted
+					default:
+						statusLabel.Text = StatusReady
+					}
 				} else {
-					statusLabel.Text = "[✓ Ready]"
+					statusLabel.Text = StatusReady
 				}
+
 				statusLabel.Refresh()
+				nameLabel.Refresh()
 			}
 		},
 	)
@@ -114,8 +137,24 @@ func (g *ConverterGUI) createLeftColumn() *fyne.Container {
 		g.SelectFile(id)
 	}
 
+	// Drag and drop overlay - shown when list is empty
+	dndOverlay := container.NewVBox(
+		container.NewCenter(
+			container.NewVBox(
+				widget.NewIcon(theme.DownloadIcon()),
+				widget.NewLabel("Drag & drop files here"),
+				widget.NewLabel("or click '+ Add'"),
+			),
+		),
+	)
+	dndOverlay.Hide()
+
+	// Container for file list with overlay
+	listContainer := container.NewStack(g.fileList, dndOverlay)
+
 	// LOG section
-	logHeader := widget.NewRichTextFromMarkdown("### LOG")
+	logHeaderRich := widget.NewRichTextFromMarkdown("### LOG")
+	logHeader := container.NewPadded(logHeaderRich)
 	logHeader.Resize(fyne.NewSize(200, 30))
 
 	g.logWidget = widget.NewMultiLineEntry()
@@ -124,33 +163,92 @@ func (g *ConverterGUI) createLeftColumn() *fyne.Container {
 	g.logWidget.Wrapping = fyne.TextWrapWord
 	g.logWidget.Resize(fyne.NewSize(200, minLogHeight))
 
-	// Create log container with minimum height
 	logContainer := container.NewVBox(
 		logHeader,
 		widget.NewSeparator(),
 	)
 	logContainer.Add(g.logWidget)
 	logContainer.Resize(fyne.NewSize(200, minLogHeight+50))
+	logContainer = container.NewPadded(logContainer)
 
-	// Top section: header and buttons
+	// OUTPUT section (at bottom of left column)
+	outputLabel := widget.NewLabel("Output:")
+
+	g.statusBarOutput = widget.NewLabel("Same as input")
+	g.statusBarOutput.TextStyle = fyne.TextStyle{Italic: true}
+
+	g.browseBtn = widget.NewButton("Browse...", func() {
+		g.SelectOutputDirectory()
+	})
+
+	outputRow := container.NewBorder(
+		nil, nil, outputLabel, g.browseBtn, g.statusBarOutput,
+	)
+	outputRow = container.NewPadded(outputRow)
+
+	outputSection := container.NewVBox(
+		widget.NewSeparator(),
+		outputRow,
+	)
+	outputSection = container.NewPadded(outputSection)
+
+	// Top section: buttons only
 	topSection := container.NewVBox(
-		inputHeader,
 		buttonRow,
 		widget.NewSeparator(),
 	)
+	topSection = container.NewPadded(topSection)
 
-	// Use VSplit for vertical split between list and log
-	// This allows resizing and maintains proper ratio
-	vsplit := container.NewVSplit(
-		container.NewBorder(topSection, nil, nil, nil, g.fileList),
+	// Use VSplit for vertical split between list+log and output
+	// The list and log share a VSplit, output is at the bottom
+	middleSplit := container.NewVSplit(
+		container.NewBorder(topSection, nil, nil, nil, listContainer),
 		logContainer,
 	)
-	vsplit.SetOffset(0.7) // List gets 70%, log gets 30%
+	middleSplit.SetOffset(0.7) // List gets 70%, log gets 30%
 
-	return container.NewBorder(nil, nil, nil, nil, vsplit)
+	// Left column: list/log in middle, output at bottom
+	leftColumn := container.NewBorder(
+		nil,           // Top
+		outputSection, // Bottom
+		nil,           // Left
+		nil,           // Right
+		middleSplit,   // Center (expands)
+	)
+
+	// Store reference to overlay for show/hide
+	g.dndOverlay = dndOverlay
+	g.updateDndOverlay()
+
+	return leftColumn
 }
 
-// createRightColumn creates the right column with Settings, Inspector, and Convert button
+// updateDndOverlay shows/hides the drag-and-drop overlay based on file count
+func (g *ConverterGUI) updateDndOverlay() {
+	if g.dndOverlay == nil {
+		return
+	}
+	if len(g.inputFiles) == 0 {
+		g.dndOverlay.Show()
+	} else {
+		g.dndOverlay.Hide()
+	}
+}
+
+// updateStatusBar updates the output label in the left column
+func (g *ConverterGUI) updateStatusBar() {
+	if g.statusBarOutput == nil {
+		return
+	}
+
+	if g.outputDir == "" {
+		g.statusBarOutput.SetText("Same as input")
+	} else {
+		g.statusBarOutput.SetText(g.outputDir)
+	}
+}
+
+// createRightColumn creates the right column with Settings, Inspector, Convert button, and version
 func (g *ConverterGUI) createRightColumn() *fyne.Container {
 	// GLOBAL SETTINGS panel
 	globalSettings := g.createGlobalSettingsPanel()
@@ -165,12 +263,15 @@ func (g *ConverterGUI) createRightColumn() *fyne.Container {
 	g.progressBar = widget.NewProgressBar()
 	g.progressBar.Hide()
 
-	// CONVERT NOW button
-	g.convertBtn = widget.NewButton("CONVERT NOW", func() {
+	// CONVERT button
+	g.convertBtn = widget.NewButton("CONVERT", func() {
 		go g.StartConversion()
 	})
 	g.convertBtn.Importance = widget.HighImportance
 	g.convertBtn.Disable()
+
+	// Wrap button in padding to avoid being too close to edge
+	convertBtnWithPadding := container.NewPadded(g.convertBtn)
 
 	// Middle section: inspector with progress bar
 	middleSection := container.NewVBox(
@@ -182,11 +283,11 @@ func (g *ConverterGUI) createRightColumn() *fyne.Container {
 
 	// Right column using border layout
 	rightColumn := container.NewBorder(
-		globalSettings, // Top
-		g.convertBtn,   // Bottom
-		nil,            // Left
-		nil,            // Right
-		middleSection,  // Center (expands)
+		globalSettings,        // Top
+		convertBtnWithPadding, // Bottom
+		nil,                   // Left
+		nil,                   // Right
+		middleSection,         // Center (expands)
 	)
 
 	return container.NewPadded(rightColumn)
@@ -245,36 +346,13 @@ func (g *ConverterGUI) createGlobalSettingsPanel() *fyne.Container {
 		g.overwriteCheck,
 	)
 
-	// Output directory - entry expands properly
-	outputLabel := widget.NewLabel("Output:")
-	outputLabel.Resize(fyne.NewSize(60, 20))
-
-	g.outputDirEntry = widget.NewEntry()
-	g.outputDirEntry.SetPlaceHolder("Same as input (default)")
-	g.outputDirEntry.Disable()
-
-	g.browseBtn = widget.NewButton("Browse...", func() {
-		g.SelectOutputDirectory()
-	})
-	g.browseBtn.Resize(fyne.NewSize(90, minButtonHeight))
-
-	// Entry expands, button fixed at right
-	outputRow := container.NewBorder(
-		nil, nil, // Top, Bottom
-		outputLabel,      // Left
-		g.browseBtn,      // Right
-		g.outputDirEntry, // Center (expands)
-	)
-
-	// Combine all
+	// Combine all (output controls moved to status bar)
 	vbox := container.NewVBox(
 		header,
 		widget.NewSeparator(),
 		targetRow,
 		widget.NewSeparator(),
 		optionsBox,
-		widget.NewSeparator(),
-		outputRow,
 	)
 
 	return container.NewPadded(vbox)
@@ -287,28 +365,29 @@ func (g *ConverterGUI) createPatchInspectorPanel() *fyne.Container {
 	// File name
 	g.inspectorFileName = widget.NewLabel("No file selected")
 	g.inspectorFileName.TextStyle = fyne.TextStyle{Bold: true}
-	g.inspectorFileName.Resize(fyne.NewSize(200, 20))
 
 	// Overview
 	g.inspectorOverview = widget.NewLabel("")
-	g.inspectorOverview.Resize(fyne.NewSize(200, 20))
 
-	// Contents (module list)
+	// Contents (module list) - use regular Label for tighter spacing
 	contentsLabel := widget.NewLabel("Contents:")
-	contentsLabel.Resize(fyne.NewSize(60, 20))
 
-	g.inspectorContents = widget.NewRichText(
-		&widget.TextSegment{Text: "No file selected"},
-	)
-	g.inspectorContents.Wrapping = fyne.TextWrapWord
+	g.inspectorContents = widget.NewLabel("No file selected")
 
 	// Scrollable container for contents
 	contentsScroll := container.NewScroll(g.inspectorContents)
 	contentsScroll.SetMinSize(fyne.NewSize(200, 100))
 
+	// Contents section (label + scroll) - stored separately for show/hide
+	g.inspectorContentsContainer = container.NewVBox(
+		contentsLabel,
+		contentsScroll,
+	)
+	// Initially hide contents when no file is selected
+	g.inspectorContentsContainer.Hide()
+
 	// Status note
 	g.inspectorStatus = widget.NewLabel("")
-	g.inspectorStatus.Resize(fyne.NewSize(200, 40))
 	g.inspectorStatus.Wrapping = fyne.TextWrapWord
 
 	// Combine all
@@ -318,8 +397,7 @@ func (g *ConverterGUI) createPatchInspectorPanel() *fyne.Container {
 		g.inspectorFileName,
 		g.inspectorOverview,
 		widget.NewSeparator(),
-		contentsLabel,
-		contentsScroll,
+		g.inspectorContentsContainer, // This will be shown/hidden
 		widget.NewSeparator(),
 		g.inspectorStatus,
 	)
@@ -425,9 +503,15 @@ func (g *ConverterGUI) showAddFolderDialog() {
 
 // showAboutDialog shows the about dialog
 func (g *ConverterGUI) showAboutDialog() {
+	aboutText := fmt.Sprintf("vRackConverter v%s\n\n", Version)
+	aboutText += "Convert between virtual modular synthesizer patches.\n\n"
+	aboutText += "Supported formats:\n• VCV Rack v2\n• VCV Rack v0.6\n• MiRack\n\n"
+	aboutText += "Source: https://github.com/vrackconverter/vrackconverter\n\n"
+	aboutText += fmt.Sprintf("Build: %s", BuildInfo)
+
 	dialog.ShowInformation(
-		"About RackConverter",
-		fmt.Sprintf("RackConverter v%s\n\nConvert between VCV Rack and MiRack patch formats.\n\nSupported formats:\n• VCV Rack v2\n• VCV Rack v0.6\n• MiRack", Version),
+		"About vRackConverter",
+		aboutText,
 		g.window,
 	)
 }
