@@ -45,3 +45,4 @@ test/temp/
 scripts/__pycache__/
 *.pyc
 vrackconverter-cli
+/vrackconverter-gui

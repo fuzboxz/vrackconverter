@@ -169,7 +169,7 @@ jobs:
         with:
           name: vrackconverter-gui-${{ matrix.os }}
           path: ${{ env.ARCHIVE_NAME }}
-          retention-days: 90
+          retention-days: 3
 
       - name: Upload CLI artifacts
         if: matrix.build_all_cli
@@ -180,7 +180,7 @@ jobs:
             vrackconverter-linux-*.tar.gz
             vrackconverter-darwin-*.tar.gz
             vrackconverter-windows-*.zip
-          retention-days: 90
+          retention-days: 3
 
   release:
     name: Release
@@ -213,43 +213,18 @@ jobs:
 
       - name: Create release
         env:
-          NOTES_FILE: ${{ runner.temp }}/release-notes.txt
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-
-          echo "## vRackConverter ${{ github.ref_name }}" > "$NOTES_FILE"
-          echo "" >> "$NOTES_FILE"
-          echo "### What's Changed" >> "$NOTES_FILE"
-          echo "" >> "$NOTES_FILE"
-          if [ -n "$PREV_TAG" ]; then
-            git log "$PREV_TAG..HEAD" --pretty=format:"- %s" --no-merges | grep -vi 'claude' >> "$NOTES_FILE" || true
-          else
-            echo "- Initial release" >> "$NOTES_FILE"
-          fi
-          echo "" >> "$NOTES_FILE"
-          echo "### Downloads" >> "$NOTES_FILE"
-          echo "" >> "$NOTES_FILE"
-          echo "**CLI** (`vrackconverter`): Command-line interface for automation and scripting" >> "$NOTES_FILE"
-          echo "" >> "$NOTES_FILE"
-          echo "**GUI** (`vrackconverter-gui`): Desktop application with drag-and-drop interface" >> "$NOTES_FILE"
-          echo "" >> "$NOTES_FILE"
-          echo "Choose the appropriate file for your platform:" >> "$NOTES_FILE"
-          echo "- macOS: `vrackconverter-gui-darwin-*.app.tar.gz` (GUI) or `vrackconverter-darwin-*.tar.gz` (CLI)" >> "$NOTES_FILE"
-          echo "- Linux: `vrackconverter-gui-linux-*.tar.gz` (GUI) or `vrackconverter-linux-*.tar.gz` (CLI)" >> "$NOTES_FILE"
-          echo "- Windows: `vrackconverter-gui-windows-*.zip` (GUI) or `vrackconverter-windows-*.zip` (CLI)" >> "$NOTES_FILE"
-
-          cat "$NOTES_FILE"
-
-          # Detect pre-release tags (contain beta, rc, or alpha)
-          if [[ "${{ github.ref_name }}" =~ -(beta|rc|alpha) ]]; then
+          # Detect pre-release tags (contain beta, b, rc, alpha, a, pre, or dev)
+          # Handles: v1.0.0-beta, v1.0.0b1, v1.0.0-rc.1, v1.0.0.a1, v1.0.0-pre, etc.
+          if [[ "${{ github.ref_name }}" =~ [-.](beta|b|rc|alpha|a|pre|dev)[0-9.]*$ ]]; then
             PRERELEASE_FLAG="--prerelease"
           else
             PRERELEASE_FLAG=""
           fi
 
           gh release create '${{ github.ref_name }}' \
-            --notes-file "$NOTES_FILE" \
+            --generate-notes \
             $PRERELEASE_FLAG \
             -- \
             artifacts/**/*.tar.gz \

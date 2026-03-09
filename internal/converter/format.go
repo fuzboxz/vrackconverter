@@ -101,7 +101,22 @@ func DetectFormat(path string, data []byte) Format {
 
 // DetectFormatFromPath determines the format by reading the file at path.
 // This is a convenience wrapper around DetectFormat that handles file I/O.
+// For .mrk directory bundles, it reads the patch.vcv inside.
 func DetectFormatFromPath(path string) (Format, error) {
+	// Check if this is inside a .mrk directory bundle
+	// First, check if the path itself is a .mrk directory
+	info, err := os.Stat(path)
+	if err == nil && info.IsDir() && strings.HasSuffix(path, ".mrk") {
+		return FormatMiRack, nil
+	}
+
+	// Check if parent directory is .mrk (for patch.vcv inside bundle)
+	parentDir := filepath.Dir(path)
+	if strings.HasSuffix(parentDir, ".mrk") {
+		return FormatMiRack, nil
+	}
+
+	// Otherwise, read the file and detect from content
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return FormatUnknown, err
