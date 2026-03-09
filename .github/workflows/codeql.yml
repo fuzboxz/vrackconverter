@@ -1,8 +1,6 @@
 name: "CodeQL"
 
 on:
-  push:
-    branches: ["main"]
   pull_request:
   schedule:
     - cron: '40 2 * * 6'
@@ -39,7 +37,7 @@ jobs:
           queries: security-extended,security-and-quality
 
       - name: Build for CodeQL analysis
-        run: make build
+        run: make build-cli
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4

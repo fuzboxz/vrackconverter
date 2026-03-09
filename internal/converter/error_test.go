@@ -155,7 +155,7 @@ func TestErrorHandling_InvalidFiles(t *testing.T) {
 				defer tt.teardown(path)
 			}
 
-			_, _, err := detectInputFormat(path)
+			_, _, err := DetectInputFormat(path)
 
 			if tt.expectError && err == nil {
 				t.Errorf("Expected error for %s, got nil", tt.path)

@@ -41,3 +41,8 @@ Thumbs.db
 
 # Test temp folder
 test/temp/
+.claude/worktrees/
+scripts/__pycache__/
+*.pyc
+vrackconverter-cli
+/vrackconverter-gui

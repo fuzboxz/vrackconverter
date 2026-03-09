@@ -97,7 +97,7 @@ func readFixture(t *testing.T, relativePath string) *patchData {
 	t.Helper()
 	fullPath := filepath.Join(testFixtureDir, relativePath)
 
-	format := detectFormat(fullPath)
+	format, _ := DetectFormatFromPath(fullPath)
 	if format.IsUnknown() {
 		t.Fatalf("Failed to detect format for %s", fullPath)
 	}

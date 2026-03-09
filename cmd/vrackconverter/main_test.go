@@ -10,7 +10,7 @@ import (
 	"vrackconverter/internal/converter"
 )
 
-// binPath returns the absolute path to the vrackconverter binary
+// binPath returns the absolute path to the vrackconverter-cli binary
 func binPath(t *testing.T) string {
 	// Get the directory containing this test file
 	testDir, err := os.Getwd()
@@ -19,7 +19,7 @@ func binPath(t *testing.T) string {
 	}
 	// Navigate up: cmd/vrackconverter -> vrackconverter (project root)
 	// Use absolute path since tests run from temp directories
-	relPath := filepath.Join(testDir, "..", "..", "vrackconverter")
+	relPath := filepath.Join(testDir, "..", "..", "vrackconverter-cli")
 	absPath, err := filepath.Abs(relPath)
 	if err != nil {
 		t.Fatal(err)
@@ -124,7 +124,7 @@ func TestCLI_FlagAfterInput(t *testing.T) {
 	}
 
 	// Test: input before flags
-	cmd := exec.Command(binPath(t), inputPath, "-o", outputPath)
+	cmd := exec.Command(binPath(t), inputPath, "-o", outputPath, "--format", "v2")
 	cmd.Dir = tmpDir
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("conversion should succeed with flag after input: %v\noutput: %s", err, output)
@@ -148,7 +148,7 @@ func TestCLI_FlagBeforeInput(t *testing.T) {
 	}
 
 	// Test: flags before input
-	cmd := exec.Command(binPath(t), "-o", outputPath, inputPath)
+	cmd := exec.Command(binPath(t), "-o", outputPath, "--format", "v2", inputPath)
 	cmd.Dir = tmpDir
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("conversion should succeed with flag before input: %v\noutput: %s", err, output)
@@ -170,13 +170,13 @@ func TestCLI_NoOutputNoOverwrite_Errors(t *testing.T) {
 		t.Fatalf("Failed to create test input: %v", err)
 	}
 
-	// Test: no flags should error
-	cmd := exec.Command(binPath(t), inputPath)
+	// Test: no --format flag should error
+	cmd := exec.Command(binPath(t), inputPath, "-o", "output.vcv")
 	cmd.Dir = tmpDir
 	output, _ := cmd.CombinedOutput()
 
-	if !strings.Contains(string(output), "must specify") {
-		t.Errorf("should error when no -o or --overwrite specified for .vcv file\ngot: %s", output)
+	if !strings.Contains(string(output), "--format") {
+		t.Errorf("should error when no --format specified\ngot: %s", output)
 	}
 }
 
@@ -198,7 +198,7 @@ func TestCLI_InPlaceOverwrite(t *testing.T) {
 	}
 
 	// Convert in-place
-	cmd := exec.Command(binPath(t), inputPath, "--overwrite")
+	cmd := exec.Command(binPath(t), inputPath, "--overwrite", "--format", "v2")
 	cmd.Dir = tmpDir
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -234,8 +234,8 @@ func TestCLI_InPlaceOverwrite(t *testing.T) {
 	}
 }
 
-// TestCLI_MrkAutoNaming tests that .mrk files auto-generate .vcv output name
-func TestCLI_MrkAutoNaming(t *testing.T) {
+// TestCLI_MrkRequiresFormat tests that .mrk files require --format flag
+func TestCLI_MrkRequiresFormat(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Create a mock .mrk directory (macOS bundle format)
@@ -250,81 +250,13 @@ func TestCLI_MrkAutoNaming(t *testing.T) {
 		t.Fatalf("Failed to create patch.vcv inside .mrk: %v", err)
 	}
 
-	// When no -o is specified with .mrk input, should create test.vcv in same dir
+	// Without --format, should error
 	cmd := exec.Command(binPath(t), mrkDir)
 	cmd.Dir = tmpDir
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Logf("output: %s", output)
-	}
-
-	// Should create /tmpDir/test.vcv (same name as .mrk but with .vcv extension)
-	expectedOutput := filepath.Join(tmpDir, "test.vcv")
-	if _, err := os.Stat(expectedOutput); err != nil {
-		t.Errorf("should create %s automatically for .mrk input: %v", expectedOutput, err)
-	}
-
-	// Verify the output is a valid v2 file (zstd compressed)
-	content, _ := os.ReadFile(expectedOutput)
-	if len(content) < 4 {
-		t.Fatalf("converted file too small: %d bytes", len(content))
-	}
-	// Check for zstd magic number (0xFD2FB528 stored little-endian as 28 B5 2F FD)
-	if content[0] != 0x28 || content[1] != 0xB5 || content[2] != 0x2F || content[3] != 0xFD {
-		t.Errorf("output should be zstd compressed v2 file, got magic: %02x %02x %02x %02x",
-			content[0], content[1], content[2], content[3])
-	}
-}
-
-// TestCLI_MrkWithOverwrite_DoesNotModifyMrk tests that .mrk input is never modified
-func TestCLI_MrkWithOverwrite_DoesNotModifyMrk(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	// Create a mock .mrk directory
-	mrkDir := filepath.Join(tmpDir, "test.mrk")
-	if err := os.Mkdir(mrkDir, 0755); err != nil {
-		t.Fatalf("Failed to create .mrk directory: %v", err)
-	}
-
-	testData := []byte(`{"version":"0.6.0","modules":[],"wires":[]}`)
-	patchPath := filepath.Join(mrkDir, "patch.vcv")
-	if err := os.WriteFile(patchPath, testData, 0644); err != nil {
-		t.Fatalf("Failed to create patch.vcv inside .mrk: %v", err)
-	}
-
-	// Get original file info
-	infoBefore, err := os.Stat(patchPath)
-	if err != nil {
-		t.Fatalf("Failed to stat patch.vcv: %v", err)
-	}
-
-	// Try to convert with --overwrite flag
-	cmd := exec.Command(binPath(t), mrkDir, "--overwrite")
-	cmd.Dir = tmpDir
 	output, _ := cmd.CombinedOutput()
-	t.Logf("output: %s", output)
 
-	// The original patch.vcv inside .mrk should not be modified
-	infoAfter, err := os.Stat(patchPath)
-	if err != nil {
-		t.Fatalf("patch.vcv should still exist: %v", err)
-	}
-
-	// Check content hasn't changed
-	content, _ := os.ReadFile(patchPath)
-	if string(content) != string(testData) {
-		t.Error("patch.vcv inside .mrk should not be modified")
-	}
-
-	// Mod time should be the same (file wasn't written to)
-	if infoBefore.ModTime() != infoAfter.ModTime() {
-		t.Error("patch.vcv inside .mrk should not be modified (mod time changed)")
-	}
-
-	// A new .vcv file should be created instead
-	expectedOutput := filepath.Join(tmpDir, "test.vcv")
-	if _, err := os.Stat(expectedOutput); err != nil {
-		t.Errorf("should create %s instead of modifying .mrk: %v", expectedOutput, err)
+	if !strings.Contains(string(output), "--format") {
+		t.Errorf("should error when no --format specified for .mrk file\ngot: %s", output)
 	}
 }
 
@@ -344,9 +276,9 @@ func TestCLI_MrkWithOutput_RespectsOutput(t *testing.T) {
 		t.Fatalf("Failed to create patch.vcv inside .mrk: %v", err)
 	}
 
-	// Specify explicit output
+	// Specify explicit output with --format
 	customOutput := filepath.Join(tmpDir, "custom.vcv")
-	cmd := exec.Command(binPath(t), mrkDir, "-o", customOutput)
+	cmd := exec.Command(binPath(t), mrkDir, "-o", customOutput, "--format", "v2")
 	cmd.Dir = tmpDir
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -358,10 +290,10 @@ func TestCLI_MrkWithOutput_RespectsOutput(t *testing.T) {
 		t.Errorf("should create %s when -o is specified: %v", customOutput, err)
 	}
 
-	// Should NOT create auto-named output
-	autoOutput := filepath.Join(tmpDir, "test.vcv")
-	if _, err := os.Stat(autoOutput); err == nil {
-		t.Error("should not create auto-named output when -o is specified")
+	// Verify .mrk was not modified
+	content, _ := os.ReadFile(patchPath)
+	if string(content) != string(testData) {
+		t.Error("patch.vcv inside .mrk should not be modified")
 	}
 }
 
@@ -404,7 +336,7 @@ func TestCLI_DirectoryVcv_WithoutOutput_Errors(t *testing.T) {
 	createTestVcvFile(t, inputDir, "patch2")
 
 	// Run without -o or --overwrite - should error
-	cmd := exec.Command(binPath(t), inputDir)
+	cmd := exec.Command(binPath(t), inputDir, "--format", "v2")
 	cmd.Dir = tmpDir
 	output, err := cmd.CombinedOutput()
 
@@ -418,8 +350,8 @@ func TestCLI_DirectoryVcv_WithoutOutput_Errors(t *testing.T) {
 	}
 }
 
-// TestCLI_DirectoryMrk_WithoutOutput_CreatesInPlace tests that .mrk directories create .vcv in same directory
-func TestCLI_DirectoryMrk_WithoutOutput_CreatesInPlace(t *testing.T) {
+// TestCLI_DirectoryMrk_WithoutOutput_Errors tests that .mrk directories require -o or --overwrite
+func TestCLI_DirectoryMrk_WithoutOutput_Errors(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Create directory with .mrk bundles
@@ -430,27 +362,14 @@ func TestCLI_DirectoryMrk_WithoutOutput_CreatesInPlace(t *testing.T) {
 	createTestMrkBundle(t, inputDir, "patch1")
 	createTestMrkBundle(t, inputDir, "patch2")
 
-	// Run without -o - should create .vcv files in same directory
-	cmd := exec.Command(binPath(t), inputDir, "-q")
+	// Run without -o - should error (auto-creation removed)
+	cmd := exec.Command(binPath(t), inputDir, "--format", "v2", "-q")
 	cmd.Dir = tmpDir
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("command should succeed for .mrk directory without -o: %v\noutput: %s", err, output)
-	}
+	output, _ := cmd.CombinedOutput()
 
-	// Check that .vcv files were created in the input directory
-	for _, name := range []string{"patch1.vcv", "patch2.vcv"} {
-		outputPath := filepath.Join(inputDir, name)
-		if _, err := os.Stat(outputPath); err != nil {
-			t.Errorf("expected output file %s should exist: %v", outputPath, err)
-		}
-	}
-
-	// Verify .mrk bundles were not modified
-	patch1Path := filepath.Join(inputDir, "patch1.mrk", "patch.vcv")
-	content, _ := os.ReadFile(patch1Path)
-	if string(content) != `{"version":"0.6.0","modules":[],"wires":[]}` {
-		t.Error("patch.vcv inside .mrk bundle should not be modified")
+	// Should error about missing -o or --overwrite
+	if !strings.Contains(string(output), "must specify") {
+		t.Errorf("should error when no -o or --overwrite specified for directory\ngot: %s", output)
 	}
 }
 
@@ -468,7 +387,7 @@ func TestCLI_DirectoryMrk_WithOutput(t *testing.T) {
 
 	// Run with -o outputDir/
 	outputDir := filepath.Join(tmpDir, "output")
-	cmd := exec.Command(binPath(t), inputDir, "-o", outputDir, "-q")
+	cmd := exec.Command(binPath(t), inputDir, "-o", outputDir, "--format", "v2", "-q")
 	cmd.Dir = tmpDir
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -511,7 +430,7 @@ func TestCLI_DirectoryVcv_WithOutput(t *testing.T) {
 
 	// Run with -o outputDir/
 	outputDir := filepath.Join(tmpDir, "output")
-	cmd := exec.Command(binPath(t), inputDir, "-o", outputDir, "-q")
+	cmd := exec.Command(binPath(t), inputDir, "-o", outputDir, "--format", "v2", "-q")
 	cmd.Dir = tmpDir
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -540,7 +459,7 @@ func TestCLI_DirectoryMixed_WithOutput(t *testing.T) {
 	createTestMrkBundle(t, inputDir, "mrkpatch")
 
 	// Mixed directory without -o should error (treats as .vcv directory)
-	cmd := exec.Command(binPath(t), inputDir)
+	cmd := exec.Command(binPath(t), inputDir, "--format", "v2")
 	cmd.Dir = tmpDir
 	output, _ := cmd.CombinedOutput()
 	if !strings.Contains(string(output), "must specify") {
@@ -549,7 +468,7 @@ func TestCLI_DirectoryMixed_WithOutput(t *testing.T) {
 
 	// Mixed directory with -o should work
 	outputDir := filepath.Join(tmpDir, "output")
-	cmd = exec.Command(binPath(t), inputDir, "-o", outputDir, "-q")
+	cmd = exec.Command(binPath(t), inputDir, "-o", outputDir, "--format", "v2", "-q")
 	cmd.Dir = tmpDir
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -577,7 +496,7 @@ func TestCLI_DirectoryEmpty(t *testing.T) {
 
 	// Run with -o output
 	outputDir := filepath.Join(tmpDir, "output")
-	cmd := exec.Command(binPath(t), inputDir, "-o", outputDir, "-q")
+	cmd := exec.Command(binPath(t), inputDir, "-o", outputDir, "--format", "v2", "-q")
 	cmd.Dir = tmpDir
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -609,7 +528,7 @@ func TestCLI_DirectoryMrkCorrupt(t *testing.T) {
 
 	// Run with -o output
 	outputDir := filepath.Join(tmpDir, "output")
-	cmd := exec.Command(binPath(t), inputDir, "-o", outputDir, "-q")
+	cmd := exec.Command(binPath(t), inputDir, "-o", outputDir, "--format", "v2", "-q")
 	cmd.Dir = tmpDir
 	output, err := cmd.CombinedOutput()
 
@@ -638,8 +557,8 @@ func TestConvertCLI_WithMetaModule(t *testing.T) {
 			t.Fatalf("Failed to create test input: %v", err)
 		}
 
-		// Convert with -m flag
-		cmd := exec.Command(binPath(t), inputPath, "-o", outputPath, "-m", "-q")
+		// Convert with -m flag and --format
+		cmd := exec.Command(binPath(t), inputPath, "-o", outputPath, "-m", "--format", "v2", "-q")
 		cmd.Dir = tmpDir
 		output, err := cmd.CombinedOutput()
 		if err != nil {
@@ -667,8 +586,8 @@ func TestConvertCLI_WithMetaModule(t *testing.T) {
 			t.Fatalf("Failed to create test input: %v", err)
 		}
 
-		// Convert with --metamodule flag
-		cmd := exec.Command(binPath(t), inputPath, "-o", outputPath, "--metamodule", "-q")
+		// Convert with --metamodule flag and --format
+		cmd := exec.Command(binPath(t), inputPath, "-o", outputPath, "--metamodule", "--format", "v2", "-q")
 		cmd.Dir = tmpDir
 		output, err := cmd.CombinedOutput()
 		if err != nil {
@@ -693,7 +612,7 @@ func TestConvertCLI_WithMetaModule(t *testing.T) {
 		}
 
 		// Flag before input path
-		cmd := exec.Command(binPath(t), "-m", inputPath, "-o", outputPath, "-q")
+		cmd := exec.Command(binPath(t), "-m", inputPath, "-o", outputPath, "--format", "v2", "-q")
 		cmd.Dir = tmpDir
 		output, err := cmd.CombinedOutput()
 		if err != nil {

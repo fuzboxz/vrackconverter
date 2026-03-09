@@ -27,7 +27,6 @@ func init() {
 	flag.BoolVar(&showVersion, "version", false, "Show version")
 	flag.StringVar(&outputPath, "o", "", "Output file/directory")
 	flag.StringVar(&outputPath, "output", "", "Output file/directory")
-	flag.StringVar(&outputFormat, "f", "", "Output format: v2, v06, or mirack (overrides file extension)")
 	flag.StringVar(&outputFormat, "format", "", "Output format: v2, v06, or mirack (overrides file extension)")
 	flag.BoolVar(&overwrite, "overwrite", false, "Overwrite input file in place")
 	flag.BoolVar(&quiet, "q", false, "Suppress non-error output")
@@ -40,19 +39,16 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, `vrackconverter - Convert between VCV Rack and MiRack patch formats
 
 Usage:
-  vrackconverter <input> -o <output>     # Convert to new file
-  vrackconverter <input> --overwrite     # Overwrite input file in place
-  vrackconverter <input.mrk>             # Auto-create .vcv (never modifies .mrk)
-  vrackconverter <input.vcv> -o output.mrk  # Convert V2 to MiRack
-  vrackconverter <dir-with-mrk>         # Auto-creates .vcv in same directory
-  vrackconverter <dir> -o <output>       # Batch convert directory
+  vrackconverter <input> -o <output> --format <fmt>     # Convert to new file
+  vrackconverter <input> --overwrite --format <fmt>     # Overwrite input file in place
+  vrackconverter <dir> -o <output> --format <fmt>       # Batch convert directory
 
 Arguments:
   <input>    Input .vcv or .mrk file, or directory
 
 Flags:
   -o, --output <path>    Output file/directory (if not specified, requires --overwrite)
-  -f, --format <fmt>     Output format: v2, v06, or mirack (overrides file extension)
+      --format <fmt>     Output format (required): v2, v06, or mirack
       --overwrite        Overwrite input file in place
   -m, --metamodule       Add 4ms MetaModule (HubMedium) to patch
   -q, --quiet            Suppress non-error output
@@ -61,53 +57,24 @@ Flags:
 
 Examples:
   # MiRack to V2
-  vrackconverter my-patch.mrk                      # Creates my-patch.vcv
-  vrackconverter my-patch.mrk -o converted.vcv
-  vrackconverter ./mrk-patches/                    # Creates .vcv alongside .mrk
+  vrackconverter my-patch.mrk -o converted.vcv --format v2
+  vrackconverter ./mrk-patches/ -o ./v2-patches/ --format v2
 
-  # V2 to MiRack (NEW)
-  vrackconverter v2-patch.vcv -o output.mrk       # Creates output.mrk bundle
-  vrackconverter ./v2-patches/ -o ./mirack/        # Batch convert to MiRack
+  # V2 to MiRack
+  vrackconverter v2-patch.vcv -o output.mrk --format mirack
+  vrackconverter ./v2-patches/ -o ./mirack/ --format mirack
 
-  # Explicit format selection (NEW)
-  vrackconverter input.vcv -o output.vcv --format v06  # Force v0.6 format
-  vrackconverter input.vcv --overwrite --format v06     # In-place to v0.6
+  # V2 to V0.6
+  vrackconverter input.vcv -o output.vcv --format v06
+  vrackconverter input.vcv --overwrite --format v06
 
-  # In-place
-  vrackconverter old-patch.vcv --overwrite
-  vrackconverter ./patches/ -o ./converted/        # Batch with output dir
+  # In-place conversion
+  vrackconverter old-patch.vcv --overwrite --format v2
 `)
 }
 
 func isMrkFile(path string) bool {
 	return strings.ToLower(filepath.Ext(path)) == ".mrk"
-}
-
-// directoryContainsMrkFiles detects if directory contains .mrk files but not .vcv files.
-// This determines whether to auto-generate output for .mrk directories.
-func directoryContainsMrkFiles(dirPath string) bool {
-	entries, err := os.ReadDir(dirPath)
-	if err != nil {
-		return false
-	}
-
-	hasMrk, hasVcv := false, false
-	for _, e := range entries {
-		if e.IsDir() {
-			// Check for .mrk bundle directories
-			if strings.ToLower(filepath.Ext(e.Name())) == ".mrk" {
-				hasMrk = true
-			}
-			continue
-		}
-		ext := strings.ToLower(filepath.Ext(e.Name()))
-		if ext == ".mrk" {
-			hasMrk = true
-		} else if ext == ".vcv" {
-			hasVcv = true
-		}
-	}
-	return hasMrk && !hasVcv
 }
 
 // parseOutputFormat converts a format string to a Format type.
@@ -181,27 +148,31 @@ func main() {
 
 	inputPath := positionalArgs[0]
 
-	opts := converter.Options{
-		Overwrite:  overwrite,
-		Quiet:      quiet,
-		MetaModule: metamodule,
+	// Require --format flag
+	if outputFormat == "" {
+		fmt.Fprintln(os.Stderr, "error: --format flag is required (v2, v06, or mirack)")
+		printUsage()
+		os.Exit(1)
 	}
 
-	// Parse output format if specified
-	if outputFormat != "" {
-		format, err := parseOutputFormat(outputFormat)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		opts.OutputFormat = format
+	// Parse output format
+	format, err := parseOutputFormat(outputFormat)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	opts := converter.Options{
+		Overwrite:    overwrite,
+		Quiet:        quiet,
+		MetaModule:   metamodule,
+		OutputFormat: format,
 	}
 
 	// Check for .mrk bundles BEFORE directory check, since .mrk bundles are directories
 	// but should be treated as single files for conversion
 	if isMrkFile(inputPath) {
 		// .mrk is a directory bundle - look for patch.vcv inside
-		mrkPath := inputPath
 		actualInput := filepath.Join(inputPath, "patch.vcv")
 		if _, err := os.Stat(actualInput); err != nil {
 			fmt.Fprintf(os.Stderr, "error: .mrk bundle must contain patch.vcv: %v\n", err)
@@ -209,46 +180,43 @@ func main() {
 		}
 		inputPath = actualInput
 
-		if outputPath == "" {
-			// Auto-generate output path: replace .mrk with .vcv
-			baseName := mrkPath[:len(mrkPath)-len(filepath.Ext(mrkPath))]
-			outputPath = baseName + ".vcv"
-			if !quiet {
-				fmt.Fprintf(os.Stderr, "info: .mrk input detected, creating %s\n", outputPath)
-			}
+		// Require explicit output path or overwrite
+		if outputPath == "" && !overwrite {
+			fmt.Fprintln(os.Stderr, "error: must specify -o <output> or --overwrite")
+			printUsage()
+			os.Exit(1)
 		}
-		// Note: .mrk files themselves are never modified since outputPath != inputPath
-		// The --overwrite flag controls whether the auto-generated .vcv can be overwritten
+
+		// In-place conversion: output = input
+		if outputPath == "" && overwrite {
+			outputPath = inputPath
+		}
+
 		doConvert(inputPath, outputPath, opts)
 		return
 	}
 
 	// Check if input is a directory (for batch conversion of .vcv or .mrk files)
 	if converter.IsDirectory(inputPath) {
-		// Directory handling
+		// Directory handling - require explicit output
 		if outputPath == "" && !overwrite {
-			// Check if directory contains .mrk files (but not .vcv files)
-			if directoryContainsMrkFiles(inputPath) {
-				// Auto-generate output: convert in place (creates .vcv next to .mrk)
-				outputPath = inputPath
-				if !quiet {
-					fmt.Fprintf(os.Stderr, "info: .mrk directory detected, creating .vcv files in same directory\n")
-				}
-			} else {
-				// .vcv directory requires explicit output
-				fmt.Fprintln(os.Stderr, "error: must specify -o <output> or --overwrite for .vcv directories")
-				printUsage()
-				os.Exit(1)
-			}
+			fmt.Fprintln(os.Stderr, "error: must specify -o <output> or --overwrite for directories")
+			printUsage()
+			os.Exit(1)
 		}
+
+		// In-place conversion: output = input
+		if outputPath == "" && overwrite {
+			outputPath = inputPath
+		}
+
 		doConvertDirectory(inputPath, outputPath, opts)
 		return
 	}
 
-	// For non-.mrk files
+	// For single files, require explicit output path or overwrite
 	if outputPath == "" && !overwrite {
 		fmt.Fprintln(os.Stderr, "error: must specify -o <output> or --overwrite")
-		fmt.Fprintln(os.Stderr, "  (to convert in place and overwrite the input file)")
 		printUsage()
 		os.Exit(1)
 	}

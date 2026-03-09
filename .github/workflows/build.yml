@@ -47,33 +47,45 @@ jobs:
       - name: Verify dependencies
         run: go mod verify
 
-      - name: Build binary (required for CLI integration tests)
-        run: go build -ldflags "-X main.Version=dev" -o vrackconverter ./cmd/vrackconverter/
+      - name: Build CLI binary (required for integration tests)
+        run: go build -ldflags "-X main.Version=dev" -o vrackconverter-cli ./cmd/vrackconverter/
 
       - name: Run tests
-        run: go test -v -race ./...
+        run: go test -race ./cmd/vrackconverter ./internal/converter/...
 
+      - name: Run E2E tests (only show failures)
+        if: failure()
+        run: go test -v ./cmd/vrackconverter -run TestCLI
+
+  # Build GUI and CLI for all platforms
   build:
-    name: Build
-    runs-on: ubuntu-latest
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.runs-on }}
     needs: test
     # Only run on canonical repo for releases
     if: github.repository == 'fuzboxz/vrackconverter' && startsWith(github.ref, 'refs/tags/v')
     strategy:
       matrix:
         include:
-          - goos: linux
-            goarch: amd64
-          - goos: linux
+          # macOS builds GUI (Apple Silicon only)
+          - os: macOS
+            runs-on: macos-latest
+            goos: darwin
             goarch: arm64
-          - goos: darwin
+            build_gui: true
+          # Linux builds GUI + all CLI variants
+          - os: Linux
+            runs-on: ubuntu-latest
+            goos: linux
             goarch: amd64
-          - goos: darwin
-            goarch: arm64
-          - goos: windows
+            build_gui: true
+            build_all_cli: true
+          # Windows builds GUI
+          - os: Windows
+            runs-on: windows-latest
+            goos: windows
             goarch: amd64
-          - goos: windows
-            goarch: arm64
+            build_gui: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -89,34 +101,86 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      - name: Build
+      # Install dependencies for Linux GUI
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxxf86vm-dev
+
+      # Build GUI
+      - name: Build GUI
+        if: matrix.build_gui
         shell: bash
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            go build -ldflags "-X main.Version=$VERSION" -o vrackconverter ./cmd/vrackconverter-gui/
+            ./scripts/macos-package.sh vrackconverter "${VERSION#v}"
+            ARCHIVE_NAME="vrackconverter-gui-${{ matrix.goos }}-${{ matrix.goarch }}.app.tar.gz"
+            tar -czf "$ARCHIVE_NAME" vrackconverter.app
+            echo "ARCHIVE_NAME=$ARCHIVE_NAME" >> "$GITHUB_ENV"
+          elif [ "${{ runner.os }}" = "Linux" ]; then
+            go build -ldflags "-X main.Version=$VERSION" -o vrackconverter ./cmd/vrackconverter-gui/
+            ARCHIVE_NAME="vrackconverter-gui-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
+            tar -czf "$ARCHIVE_NAME" vrackconverter
+            echo "ARCHIVE_NAME=$ARCHIVE_NAME" >> "$GITHUB_ENV"
+          else
+            # Windows
+            go build -ldflags "-X main.Version=$VERSION" -o vrackconverter.exe ./cmd/vrackconverter-gui/
+            ARCHIVE_NAME="vrackconverter-gui-${{ matrix.goos }}-${{ matrix.goarch }}.zip"
+            7z a -tzip "$ARCHIVE_NAME" vrackconverter.exe
+            echo "ARCHIVE_NAME=$ARCHIVE_NAME" >> "$GITHUB_ENV"
+          fi
+
+      # Build all CLI variants (from Linux runner)
+      - name: Build all CLI variants
+        if: matrix.build_all_cli
+        shell: bash
+        env:
           CGO_ENABLED: 0
           VERSION: ${{ github.ref_name }}
         run: |
-          ARCHIVE_NAME="vrackconverter-${{ matrix.goos }}-${{ matrix.goarch }}"
+          # linux/amd64
+          go build -ldflags "-X main.Version=$VERSION" -o vrackconverter ./cmd/vrackconverter/
+          tar -czf vrackconverter-linux-amd64.tar.gz vrackconverter
+          # linux/arm64
+          GOOS=linux GOARCH=arm64 go build -ldflags "-X main.Version=$VERSION" -o vrackconverter ./cmd/vrackconverter/
+          tar -czf vrackconverter-linux-arm64.tar.gz vrackconverter
+          # darwin/amd64
+          GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o vrackconverter ./cmd/vrackconverter/
+          tar -czf vrackconverter-darwin-amd64.tar.gz vrackconverter
+          # darwin/arm64
+          GOOS=darwin GOARCH=arm64 go build -ldflags "-X main.Version=$VERSION" -o vrackconverter ./cmd/vrackconverter/
+          tar -czf vrackconverter-darwin-arm64.tar.gz vrackconverter
+          # windows/amd64
+          GOOS=windows GOARCH=amd64 go build -ldflags "-X main.Version=$VERSION" -o vrackconverter.exe ./cmd/vrackconverter/
+          zip -q vrackconverter-windows-amd64.zip vrackconverter.exe
+          # windows/arm64
+          GOOS=windows GOARCH=arm64 go build -ldflags "-X main.Version=$VERSION" -o vrackconverter.exe ./cmd/vrackconverter/
+          zip -q vrackconverter-windows-arm64.zip vrackconverter.exe
 
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            BINARY_NAME="vrackconverter.exe"
-            go build -ldflags "-X main.Version=$VERSION" -o "$BINARY_NAME" ./cmd/vrackconverter/
-            zip -q "$ARCHIVE_NAME.zip" "$BINARY_NAME"
-            echo "ARCHIVE_NAME=$ARCHIVE_NAME.zip" >> "$GITHUB_ENV"
-          else
-            BINARY_NAME="vrackconverter"
-            go build -ldflags "-X main.Version=$VERSION" -o "$BINARY_NAME" ./cmd/vrackconverter/
-            tar -czf "$ARCHIVE_NAME.tar.gz" "$BINARY_NAME"
-            echo "ARCHIVE_NAME=$ARCHIVE_NAME.tar.gz" >> "$GITHUB_ENV"
-          fi
-
-      - name: Upload artifacts
+      - name: Upload GUI artifacts
+        if: matrix.build_gui
         uses: actions/upload-artifact@v4
         with:
-          name: vrackconverter-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: vrackconverter-gui-${{ matrix.os }}
           path: ${{ env.ARCHIVE_NAME }}
-          retention-days: 90
+          retention-days: 3
+
+      - name: Upload CLI artifacts
+        if: matrix.build_all_cli
+        uses: actions/upload-artifact@v4
+        with:
+          name: vrackconverter-cli-all
+          path: |
+            vrackconverter-linux-*.tar.gz
+            vrackconverter-darwin-*.tar.gz
+            vrackconverter-windows-*.zip
+          retention-days: 3
 
   release:
     name: Release
@@ -131,6 +195,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 10
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -147,9 +215,19 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Detect pre-release tags (contain beta, b, rc, alpha, a, pre, or dev)
+          # Handles: v1.0.0-beta, v1.0.0b1, v1.0.0-rc.1, v1.0.0.a1, v1.0.0-pre, etc.
+          if [[ "${{ github.ref_name }}" =~ [-.](beta|b|rc|alpha|a|pre|dev)[0-9.]*$ ]]; then
+            PRERELEASE_FLAG="--prerelease"
+          else
+            PRERELEASE_FLAG=""
+          fi
+
           gh release create '${{ github.ref_name }}' \
             --generate-notes \
+            $PRERELEASE_FLAG \
             -- \
             artifacts/**/*.tar.gz \
             artifacts/**/*.zip \
             artifacts/checksums.txt
+        shell: bash
