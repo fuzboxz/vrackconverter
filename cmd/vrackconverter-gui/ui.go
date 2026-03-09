@@ -23,14 +23,63 @@ const (
 	minButtonHeight    = 36
 )
 
-// Status indicators - use ASCII for compatibility
+// Status indicators
 const (
 	StatusReady     = "[OK]"
 	StatusWarn      = "[!]"
 	StatusError     = "[X]"
-	StatusSkipped   = "[--]"
+	StatusSkipped   = "[SKIP]"
 	StatusConverted = "[OK]"
 )
+
+// fixedWidthHBoxLayout is a custom layout that gives the first child a fixed width
+// and the second child expands to fill remaining space.
+type fixedWidthHBoxLayout struct {
+	statusWidth float32
+}
+
+func (l *fixedWidthHBoxLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	width := l.statusWidth
+	height := float32(0)
+	for _, obj := range objects {
+		minSize := obj.MinSize()
+		if obj == objects[0] {
+			// First object (status) gets fixed width
+			if minSize.Height > height {
+				height = minSize.Height
+			}
+		} else {
+			// Second object (name) expands
+			width += minSize.Width
+			if minSize.Height > height {
+				height = minSize.Height
+			}
+		}
+	}
+	return fyne.NewSize(width, height)
+}
+
+func (l *fixedWidthHBoxLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	if len(objects) == 0 {
+		return
+	}
+
+	// First object gets fixed width
+	if len(objects) > 0 {
+		objects[0].Resize(fyne.NewSize(l.statusWidth, size.Height))
+		objects[0].Move(fyne.NewPos(0, 0))
+	}
+
+	// Second object gets remaining space
+	if len(objects) > 1 {
+		remainingWidth := size.Width - l.statusWidth
+		if remainingWidth < 0 {
+			remainingWidth = 0
+		}
+		objects[1].Resize(fyne.NewSize(remainingWidth, size.Height))
+		objects[1].Move(fyne.NewPos(l.statusWidth, 0))
+	}
+}
 
 // createMainLayout creates the main two-panel layout
 func (g *ConverterGUI) createMainLayout() *fyne.Container {
@@ -76,37 +125,40 @@ func (g *ConverterGUI) createLeftColumn() *fyne.Container {
 			return len(g.inputFiles)
 		},
 		func() fyne.CanvasObject {
-			// Template: status icon on left (fixed width), file name on right
+			// Status icon - wrapped in Padded container to ensure it stays as a container
 			statusIcon := widget.NewLabel(StatusReady)
 			statusIcon.Alignment = fyne.TextAlignLeading
-			statusIcon.Resize(fyne.NewSize(50, 32))
+			// Use Padded to ensure Fyne doesn't optimize away the container
+			statusContainer := container.NewPadded(statusIcon)
+			statusContainer.Resize(fyne.NewSize(70, 16))
 
+			// File name label
 			fileNameLabel := widget.NewLabel("FileName.vcv")
 			fileNameLabel.TextStyle = fyne.TextStyle{Bold: true}
 
-			// Use HBox with fixed-width status column
-			row := container.NewHBox(
-				container.NewVBox(statusIcon),
+			// Use HBox with fixed-width status container and expanding filename
+			row := container.New(
+				&fixedWidthHBoxLayout{statusWidth: 70},
+				statusContainer,
 				fileNameLabel,
 			)
-			row.Resize(fyne.NewSize(200, 32))
 			return row
 		},
 		func(id widget.ListItemID, obj fyne.CanvasObject) {
 			if id >= 0 && id < len(g.inputFiles) {
 				path := g.inputFiles[id]
 				name := filepath.Base(path)
-				hbox := obj.(*fyne.Container)
+				row := obj.(*fyne.Container)
 
-				// Status icon (left, fixed width)
-				statusContainer := hbox.Objects[0].(*fyne.Container)
+				// Status icon container (left, fixed width)
+				statusContainer := row.Objects[0].(*fyne.Container)
 				statusLabel := statusContainer.Objects[0].(*widget.Label)
 
-				// File name (right)
-				nameLabel := hbox.Objects[1].(*widget.Label)
+				// File name (right, expands)
+				nameLabel := row.Objects[1].(*widget.Label)
 				nameLabel.Text = name
 
-				// Set status icon based on file status
+				// Set status text (no padding needed - custom layout handles alignment)
 				if status, ok := g.fileStatuses[path]; ok {
 					switch status.Status {
 					case "Ready":
@@ -302,7 +354,6 @@ func (g *ConverterGUI) createGlobalSettingsPanel() *fyne.Container {
 	targetLabel.Resize(fyne.NewSize(60, 20))
 
 	g.formatSelect = widget.NewSelect([]string{
-		"Auto-detect",
 		"VCV Rack v2",
 		"VCV Rack v0.6",
 		"MiRack",
@@ -310,7 +361,7 @@ func (g *ConverterGUI) createGlobalSettingsPanel() *fyne.Container {
 		g.SetOutputFormat(selected)
 		g.Log(fmt.Sprintf("Target: %s", selected))
 	})
-	g.formatSelect.SetSelected("Auto-detect")
+	g.formatSelect.SetSelected("VCV Rack v2")
 	g.formatSelect.Resize(fyne.NewSize(200, 30))
 
 	targetRow := container.NewBorder(
@@ -330,6 +381,8 @@ func (g *ConverterGUI) createGlobalSettingsPanel() *fyne.Container {
 			g.Log("Option disabled: Add MetaModule")
 		}
 	})
+	// Wrap MetaModule checkbox in a container for show/hide
+	g.metaModuleContainer = container.NewVBox(g.metaModuleCheck)
 
 	g.overwriteCheck = widget.NewCheck("Overwrite", func(checked bool) {
 		g.ToggleOverwrite(checked)
@@ -342,7 +395,7 @@ func (g *ConverterGUI) createGlobalSettingsPanel() *fyne.Container {
 
 	optionsBox := container.NewVBox(
 		optionsLabel,
-		g.metaModuleCheck,
+		g.metaModuleContainer,
 		g.overwriteCheck,
 	)
 

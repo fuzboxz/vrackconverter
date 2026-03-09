@@ -17,9 +17,10 @@ import (
 
 // FileStatus represents the status of a file in the queue
 type FileStatus struct {
-	Status  string // "Ready", "Warn", "Error", "Skipped", "Converted"
-	Icon    string // Visual indicator
-	Message string // Status message
+	Status      string           // "Ready", "Warn", "Error", "Skipped", "Converted"
+	Icon        string           // Visual indicator
+	Message     string           // Status message
+	InputFormat converter.Format // Detected input format
 }
 
 // PatchInfo holds information about a patch file
@@ -68,10 +69,11 @@ type ConverterGUI struct {
 	statusBarOutput *widget.Label
 
 	// UI widgets - Right Column (Global Settings)
-	formatSelect    *widget.Select
-	metaModuleCheck *widget.Check
-	overwriteCheck  *widget.Check
-	browseBtn       *widget.Button
+	formatSelect         *widget.Select
+	metaModuleCheck      *widget.Check
+	metaModuleContainer  *fyne.Container // Container for MetaModule checkbox to enable show/hide
+	overwriteCheck       *widget.Check
+	browseBtn            *widget.Button
 
 	// UI widgets - Right Column (Patch Inspector)
 	inspectorFileName          *widget.Label
@@ -226,12 +228,21 @@ func (g *ConverterGUI) AddFiles(paths []string) {
 		}
 		if !alreadyExists {
 			g.inputFiles = append(g.inputFiles, path)
-			// Initialize file status with text-based indicator
+
+			// Detect input format
+			inputFormat := g.detectFormatFromPath(path)
+
+			// Initialize file status with detected format
 			g.fileStatuses[path] = &FileStatus{
-				Status:  "Ready",
-				Icon:    StatusReady,
-				Message: "Ready to convert",
+				Status:      "Ready",
+				Icon:        StatusReady,
+				Message:     "Ready to convert",
+				InputFormat: inputFormat,
 			}
+
+			// Update predictive status based on format comparison
+			g.updateFileStatus(path)
+
 			added++
 		}
 	}
@@ -274,22 +285,59 @@ func (g *ConverterGUI) SelectOutputDirectory() {
 	d.Show()
 }
 
-// SetOutputFormat sets the target output format
+// SetOutputFormat sets the target output format and refreshes all file statuses
 func (g *ConverterGUI) SetOutputFormat(formatStr string) {
 	g.mu.Lock()
-	defer g.mu.Unlock()
 
+	var isV2 bool
 	switch strings.ToLower(strings.TrimSpace(formatStr)) {
-	case "auto", "detect", "":
-		g.outputFormat = "" // Auto-detect from extension
-	case "v2", "vcv2", "2":
+	case "v2", "vcv2", "vcv rack v2":
 		g.outputFormat = converter.FormatVCV2
-	case "v0.6", "v06", "vcv06", "0.6", "06":
+		isV2 = true
+	case "v0.6", "v06", "vcv06", "0.6", "06", "vcv rack v0.6":
 		g.outputFormat = converter.FormatVCV06
+		isV2 = false
 	case "mirack", "mrk":
 		g.outputFormat = converter.FormatMiRack
+		isV2 = false
+	default:
+		// Default to v2 if unrecognized
+		g.outputFormat = converter.FormatVCV2
+		isV2 = true
 	}
 	g.options.OutputFormat = g.outputFormat
+
+	// MetaModule is only valid for VCV Rack v2
+	if isV2 {
+		// Show MetaModule checkbox when switching to v2
+		if g.metaModuleContainer != nil {
+			g.metaModuleContainer.Show()
+		}
+	} else {
+		// Hide MetaModule checkbox and turn it off when switching away from v2
+		if g.metaModuleContainer != nil {
+			g.metaModuleContainer.Hide()
+		}
+		if g.metaModuleCheck != nil && g.metaModuleCheck.Checked {
+			// Temporarily disable callback to prevent mutex deadlock
+			// (SetChecked triggers the callback, which would try to lock the same mutex)
+			originalCallback := g.metaModuleCheck.OnChanged
+			g.metaModuleCheck.OnChanged = nil
+			g.metaModuleCheck.SetChecked(false)
+			g.metaModuleCheck.OnChanged = originalCallback
+			g.options.MetaModule = false
+		}
+	}
+
+	// Refresh all file statuses based on new output format
+	for path := range g.fileStatuses {
+		g.updateFileStatus(path)
+	}
+
+	g.mu.Unlock()
+
+	// Refresh UI outside the lock
+	g.fileList.Refresh()
 }
 
 // ToggleMetaModule toggles the MetaModule option
@@ -335,25 +383,76 @@ func (g *ConverterGUI) detectFormatFromPath(path string) converter.Format {
 	return format
 }
 
+// updateFileStatus updates a single file's status based on input format vs output format
+// Must be called with g.mu already held (or call updateAllFileStatuses instead)
+func (g *ConverterGUI) updateFileStatus(path string) {
+	status, ok := g.fileStatuses[path]
+	if !ok {
+		return
+	}
+
+	// If input format is unknown, show error
+	if status.InputFormat == converter.FormatUnknown {
+		status.Status = "Error"
+		status.Icon = StatusError
+		status.Message = "Cannot detect format"
+		return
+	}
+
+	// Compare input format with output format
+	if status.InputFormat == g.outputFormat {
+		status.Status = "Skipped"
+		status.Icon = StatusSkipped
+		status.Message = "Already in target format"
+	} else {
+		status.Status = "Ready"
+		status.Icon = StatusReady
+		// Build conversion info message
+		inputName := g.formatName(status.InputFormat)
+		outputName := g.formatName(g.outputFormat)
+		status.Message = fmt.Sprintf("Convert %s → %s", inputName, outputName)
+	}
+}
+
+// updateAllFileStatuses refreshes all file statuses based on current output format
+func (g *ConverterGUI) updateAllFileStatuses() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	for path := range g.fileStatuses {
+		g.updateFileStatus(path)
+	}
+	g.fileList.Refresh()
+}
+
+// formatName returns a human-readable format name
+func (g *ConverterGUI) formatName(format converter.Format) string {
+	switch format {
+	case converter.FormatVCV2:
+		return "v2"
+	case converter.FormatVCV06:
+		return "v0.6"
+	case converter.FormatMiRack:
+		return "MiRack"
+	default:
+		return "?"
+	}
+}
+
 // getOutputPath generates the output path for an input file
 func (g *ConverterGUI) getOutputPath(inputPath string) string {
 	baseName := filepath.Base(inputPath)
 	ext := filepath.Ext(baseName)
 	nameWithoutExt := strings.TrimSuffix(baseName, ext)
 
-	// Determine output extension
+	// Determine output extension based on selected format
 	var outputExt string
-	if g.outputFormat != "" {
-		switch g.outputFormat {
-		case converter.FormatVCV2, converter.FormatVCV06:
-			outputExt = ".vcv"
-		case converter.FormatMiRack:
-			outputExt = ".mrk"
-		default:
-			outputExt = ".vcv"
-		}
-	} else {
-		// Auto-detect: default to v2 (.vcv)
+	switch g.outputFormat {
+	case converter.FormatVCV2, converter.FormatVCV06:
+		outputExt = ".vcv"
+	case converter.FormatMiRack:
+		outputExt = ".mrk"
+	default:
 		outputExt = ".vcv"
 	}
 
