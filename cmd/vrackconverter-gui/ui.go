@@ -319,7 +319,7 @@ func (g *ConverterGUI) createRightColumn() *fyne.Container {
 	g.convertBtn = widget.NewButton("CONVERT", func() {
 		go g.StartConversion()
 	})
-	g.convertBtn.Importance = widget.HighImportance
+	g.convertBtn.Importance = widget.MediumImportance
 	g.convertBtn.Disable()
 
 	// Wrap button in padding to avoid being too close to edge
