@@ -190,13 +190,24 @@ func (g *ConverterGUI) createLeftColumn() *fyne.Container {
 	}
 
 	// Drag and drop overlay - shown when list is empty
-	dndOverlay := container.NewVBox(
-		container.NewCenter(
-			container.NewVBox(
-				widget.NewIcon(theme.DownloadIcon()),
-				widget.NewLabel("Drag & drop files here"),
-				widget.NewLabel("or click '+ Add'"),
-			),
+	// Use RichText with disabled color for subtle, theme-aware text
+	dndOverlay := container.NewCenter(
+		container.NewVBox(
+			widget.NewIcon(theme.DownloadIcon()),
+			widget.NewRichText(&widget.TextSegment{
+				Text: "Drag & drop files here",
+				Style: widget.RichTextStyle{
+					ColorName: theme.ColorNameDisabled,
+					Alignment: fyne.TextAlignCenter,
+				},
+			}),
+			widget.NewRichText(&widget.TextSegment{
+				Text: "or click '+ Add'",
+				Style: widget.RichTextStyle{
+					ColorName: theme.ColorNameDisabled,
+					Alignment: fyne.TextAlignCenter,
+				},
+			}),
 		),
 	)
 	dndOverlay.Hide()

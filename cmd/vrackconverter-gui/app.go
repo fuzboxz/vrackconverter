@@ -69,11 +69,11 @@ type ConverterGUI struct {
 	statusBarOutput *widget.Label
 
 	// UI widgets - Right Column (Global Settings)
-	formatSelect         *widget.Select
-	metaModuleCheck      *widget.Check
-	metaModuleContainer  *fyne.Container // Container for MetaModule checkbox to enable show/hide
-	overwriteCheck       *widget.Check
-	browseBtn            *widget.Button
+	formatSelect        *widget.Select
+	metaModuleCheck     *widget.Check
+	metaModuleContainer *fyne.Container // Container for MetaModule checkbox to enable show/hide
+	overwriteCheck      *widget.Check
+	browseBtn           *widget.Button
 
 	// UI widgets - Right Column (Patch Inspector)
 	inspectorFileName          *widget.Label

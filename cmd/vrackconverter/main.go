@@ -163,9 +163,9 @@ func main() {
 	}
 
 	opts := converter.Options{
-		Overwrite:   overwrite,
-		Quiet:       quiet,
-		MetaModule:  metamodule,
+		Overwrite:    overwrite,
+		Quiet:        quiet,
+		MetaModule:   metamodule,
 		OutputFormat: format,
 	}
 
