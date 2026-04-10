@@ -1,0 +1,95 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #1a1a2e;
+  color: #e0e0e0;
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+}
+#app {
+  max-width: 720px;
+  width: 100%;
+  padding: 2rem;
+}
+header { text-align: center; margin-bottom: 2rem; }
+header h1 { font-size: 1.8rem; color: #00d4ff; font-weight: 600; letter-spacing: -0.5px; }
+header .subtitle { font-size: 0.9rem; color: #888; margin-top: 0.3rem; }
+main { display: flex; flex-direction: column; gap: 1.5rem; }
+section { background: #16213e; border-radius: 8px; padding: 1.5rem; }
+section h2 { font-size: 1rem; color: #00d4ff; margin-bottom: 1rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; font-size: 0.85rem; }
+.hidden { display: none !important; }
+
+/* Drop Zone */
+#drop-zone {
+  border: 2px dashed #333;
+  border-radius: 8px;
+  padding: 2.5rem 1rem;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+  outline: none;
+}
+#drop-zone:hover, #drop-zone:focus { border-color: #00d4ff; background: rgba(0, 212, 255, 0.05); }
+#drop-zone.dragover { border-color: #00d4ff; background: rgba(0, 212, 255, 0.1); }
+.drop-icon { font-size: 2.5rem; margin-bottom: 0.5rem; }
+.drop-text { font-size: 1rem; margin-bottom: 0.3rem; }
+.drop-hint { font-size: 0.75rem; color: #666; }
+
+/* Info Panel */
+.info-panel { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-top: 1rem; padding: 0.75rem; background: #0f1629; border-radius: 6px; }
+
+/* Format Badge */
+.format-badge {
+  display: inline-block;
+  padding: 0.2rem 0.6rem;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.format-badge.v2 { background: #1b5e20; color: #a5d6a7; }
+.format-badge.v06 { background: #4a148c; color: #ce93d8; }
+.format-badge.mirack { background: #0d47a1; color: #90caf9; }
+.format-badge.cardinal { background: #b71c1c; color: #ef9a9a; }
+.format-badge.unknown { background: #333; color: #888; }
+
+/* Convert Row */
+.convert-row { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.format-label { padding: 0.3rem 0.8rem; border-radius: 4px; font-weight: 600; font-size: 0.85rem; }
+.format-label.source { background: #333; color: #00d4ff; }
+.arrow { font-size: 1.2rem; color: #666; }
+select#target-format {
+  flex: 1; min-width: 180px; padding: 0.5rem 0.75rem; border-radius: 4px;
+  background: #0f1629; color: #e0e0e0; border: 1px solid #333; font-size: 0.9rem;
+}
+select#target-format:focus { border-color: #00d4ff; outline: none; }
+button#convert-btn, button#download-btn {
+  padding: 0.5rem 1.5rem; border-radius: 4px; border: none; font-size: 0.9rem;
+  font-weight: 600; cursor: pointer; transition: background 0.2s;
+}
+button#convert-btn { background: #00d4ff; color: #1a1a2e; }
+button#convert-btn:hover:not(:disabled) { background: #00b8d4; }
+button#convert-btn:disabled { background: #333; color: #666; cursor: not-allowed; }
+button#download-btn { background: #4caf50; color: #fff; margin-top: 1rem; }
+button#download-btn:hover { background: #43a047; }
+.options-row { margin-top: 0.75rem; }
+.checkbox-label { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: #aaa; cursor: pointer; }
+.checkbox-label input { accent-color: #00d4ff; }
+
+/* Issues Panel */
+.issues-panel { margin-top: 1rem; padding: 0.75rem; background: #1a1a0e; border: 1px solid #555; border-radius: 6px; }
+.issues-panel h3 { font-size: 0.85rem; color: #ffd54f; margin-bottom: 0.5rem; }
+.issues-panel ul { list-style: none; }
+.issues-panel li { font-size: 0.8rem; color: #bbb; padding: 0.2rem 0; padding-left: 1rem; position: relative; }
+.issues-panel li::before { content: '•'; position: absolute; left: 0; color: #ffd54f; }
+
+/* Error Box */
+.error-box { padding: 1rem; background: #2a0a0a; border: 1px solid #c62828; border-radius: 6px; }
+.error-box h3 { color: #ef5350; margin-bottom: 0.5rem; }
+.error-box p { color: #e0e0e0; font-size: 0.9rem; }
+
+/* Footer */
+footer { text-align: center; margin-top: 2rem; padding: 1rem; }
+footer p { font-size: 0.75rem; color: #555; }
