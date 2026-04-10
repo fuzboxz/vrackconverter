@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VRackConverter - Patch Format Converter</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1>VRackConverter</h1>
+      <p class="subtitle">Convert patches between VCV Rack 2, MiRack, VCV Rack v0.6, and Cardinal formats</p>
+    </header>
+
+    <main>
+      <!-- Input Section -->
+      <section id="input-section">
+        <h2>Input Patch</h2>
+        <div id="drop-zone" tabindex="0" role="button" aria-label="Drop patch file here or click to browse">
+          <div class="drop-zone-content">
+            <div class="drop-icon">&#128193;</div>
+            <p class="drop-text">Drop your patch file here<br>or click to browse</p>
+            <p class="drop-hint">Supports: .vcv (V2, V0.6, Cardinal), .mrk directories, .zip (containing .mrk folder)</p>
+          </div>
+        </div>
+        <input type="file" id="file-input" accept=".vcv,.mrk,.zip" style="display:none" multiple>
+        <div id="input-info" class="info-panel hidden">
+          <span id="format-badge" class="format-badge"></span>
+          <span id="file-name"></span>
+          <span id="patch-summary"></span>
+        </div>
+      </section>
+
+      <!-- Conversion Section -->
+      <section id="convert-section" class="hidden">
+        <h2>Conversion</h2>
+        <div class="convert-row">
+          <div class="format-label source" id="source-label">Source</div>
+          <div class="arrow">&#8594;</div>
+          <select id="target-format">
+            <option value="">Select target format...</option>
+          </select>
+          <button id="convert-btn" disabled>Convert</button>
+        </div>
+        <div class="options-row">
+          <label class="checkbox-label">
+            <input type="checkbox" id="metamodule-checkbox">
+            <span>Add MetaModule (HubMedium)</span>
+          </label>
+        </div>
+      </section>
+
+      <!-- Output Section -->
+      <section id="output-section" class="hidden">
+        <h2>Output</h2>
+        <div id="result-info" class="info-panel">
+          <span id="result-badge" class="format-badge"></span>
+          <span id="result-summary"></span>
+        </div>
+        <div id="issues-panel" class="issues-panel hidden">
+          <h3>Conversion Notes</h3>
+          <ul id="issues-list"></ul>
+        </div>
+        <button id="download-btn">Download Converted Patch</button>
+      </section>
+
+      <!-- Error Section -->
+      <section id="error-section" class="hidden">
+        <div class="error-box">
+          <h3>Error</h3>
+          <p id="error-message"></p>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <p>Works entirely in your browser. No data is sent to any server.</p>
+    </footer>
+  </div>
+
+  <!-- Dependencies -->
+  <script src="js/lib/fzstd.js"></script>
+  <script src="js/lib/fflate.js"></script>
+
+  <!-- Core -->
+  <script src="js/patch.js"></script>
+  <script src="js/archive.js"></script>
+  <script src="js/formats/format-common.js"></script>
+  <script src="js/formats/format-v2.js"></script>
+  <script src="js/formats/format-v06.js"></script>
+  <script src="js/formats/format-mirack.js"></script>
+  <script src="js/formats/format-cardinal.js"></script>
+  <script src="js/converter.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

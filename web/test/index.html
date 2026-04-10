@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VRackConverter - Test Runner</title>
+  <style>
+    body { font-family: monospace; background: #1a1a2e; color: #e0e0e0; padding: 2rem; }
+    h1 { color: #00d4ff; }
+    .pass { color: #4caf50; }
+    .fail { color: #ef5350; }
+    .summary { margin-top: 1rem; padding: 1rem; background: #16213e; border-radius: 4px; font-size: 1.1rem; }
+    #results { line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <h1>VRackConverter Tests</h1>
+  <div id="results"></div>
+  <div id="summary" class="summary"></div>
+
+  <script src="../js/lib/fzstd.js"></script>
+  <script src="../js/patch.js"></script>
+  <script src="../js/archive.js"></script>
+  <script src="../js/formats/format-common.js"></script>
+  <script src="../js/formats/format-v2.js"></script>
+  <script src="../js/formats/format-v06.js"></script>
+  <script src="../js/formats/format-mirack.js"></script>
+  <script src="../js/formats/format-cardinal.js"></script>
+  <script src="../js/converter.js"></script>
+  <script src="test-runner.js"></script>
+</body>
+</html>
