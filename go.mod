@@ -2,7 +2,7 @@ module vrackconverter
 
 go 1.25.0
 
-require github.com/klauspost/compress v1.17.9
+require github.com/klauspost/compress v1.18.7
 
 require (
 	fyne.io/fyne/v2 v2.4.5
